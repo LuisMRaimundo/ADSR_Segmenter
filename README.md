@@ -4,7 +4,7 @@
 
 Desktop tool for **automatic ADSR segmentation** of monophonic or quasi-monophonic audio (orchestral one-shots, sample-library prep, spectral-analysis pipelines). Splits each file into **Attack**, **Sustain**, **Decay**, and **Release** regions with optional manual review, JSON/CSV metadata, and a boundary-error benchmark.
 
-Related research tooling: [Interval-Homogeneity-Analyser](https://github.com/LuisMRaimundo/Interval-Homogeneity-Analyser).
+Related research tooling: [Interval_Homogeneity](https://github.com/LuisMRaimundo/Interval_Homogeneity).
 
 ---
 
