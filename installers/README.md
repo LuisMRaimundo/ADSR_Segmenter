@@ -94,4 +94,4 @@ python installers/common/bootstrap.py doctor
 
 Do not commit `installers/runtime/` to git (see `.gitignore`).
 
-Modelled after [Interval-Homogeneity-Analyser](https://github.com/LuisMRaimundo/Interval-Homogeneity-Analyser) installers.
+Modelled after [Intervallic_Homogeneity](https://github.com/LuisMRaimundo/Intervallic_Homogeneity) installers.
