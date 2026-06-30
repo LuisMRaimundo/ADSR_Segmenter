@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Sound Split ADSR - Windows one-click installer
+# ADSR_Segmenter - Windows one-click installer
 
 $ErrorActionPreference = 'Stop'
 $InstallerRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -8,7 +8,7 @@ $ProjectRoot = (Resolve-Path (Join-Path $InstallerRoot '..\..')).Path
 . (Join-Path $InstallerRoot 'config.ps1')
 . (Join-Path $InstallerRoot 'lib\InstallerHelpers.ps1')
 
-$cfg = $script:SoundSplitConfig
+$cfg = $script:ADSRSegmenterConfig
 $BootstrapPath = Join-Path $ProjectRoot ($cfg.BootstrapScript -replace '/', '\')
 $script:InstallLogPath = Join-Path $ProjectRoot 'installers\runtime\windows\install.log'
 
@@ -33,7 +33,7 @@ try {
         throw "Bootstrap exited with code $exitCode"
     }
     Write-Host ''
-    Write-Host 'SUCCESS - Sound Split ADSR finished.' -ForegroundColor Green
+    Write-Host 'SUCCESS - ADSR_Segmenter finished.' -ForegroundColor Green
     Write-Host "  Log: $script:InstallLogPath"
     exit 0
 }

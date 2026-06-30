@@ -1,5 +1,5 @@
 """
-Headless batch ADSR splitter — same core as the GUI, no Tkinter required.
+Headless batch ADSR_Segmenter — same core as the GUI, no Tkinter required.
 
 Usage:
   python split_audio_cli.py --folder "D:/Samples/Violin"
@@ -130,7 +130,7 @@ def export_metadata(folder: Path, results: List[Dict[str, Any]], cfg: core.Segme
 
 
 def main(argv: List[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Batch ADSR audio segment splitter")
+    parser = argparse.ArgumentParser(description="ADSR_Segmenter batch CLI")
     parser.add_argument("--folder", "-f", type=Path, required=True, help="Folder with audio files")
     parser.add_argument(
         "--preset", "-p", default="Medium (1.5-3.0s)",

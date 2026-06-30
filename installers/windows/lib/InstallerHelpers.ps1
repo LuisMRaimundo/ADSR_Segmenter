@@ -31,7 +31,7 @@ function Test-PythonVersionOk {
         }
         if ($out -match '^3\.(\d+)$') {
             $minor = [int]$Matches[1]
-            $cfg = $script:SoundSplitConfig
+            $cfg = $script:ADSRSegmenterConfig
             return ($minor -ge $cfg.PythonMinMinor -and $minor -le $cfg.PythonMaxMinor)
         }
     } catch { }
@@ -119,7 +119,7 @@ function Test-PythonInstallerExitOk {
 }
 
 function Install-PythonIfNeeded {
-    $cfg = $script:SoundSplitConfig
+    $cfg = $script:ADSRSegmenterConfig
     Write-InstallLog "Python 3.10-3.12 not found. Installing Python $($cfg.PythonVersion)..."
 
     try {
@@ -195,7 +195,7 @@ function Start-BootstrapLaunch {
         [string]$ProjectRoot,
         [string]$BootstrapPath
     )
-    $cfg = $script:SoundSplitConfig
+    $cfg = $script:ADSRSegmenterConfig
     $portable = Join-Path $ProjectRoot ($cfg.PortablePythonExe -replace '/', '\')
 
     if (Test-Path -LiteralPath $portable) {

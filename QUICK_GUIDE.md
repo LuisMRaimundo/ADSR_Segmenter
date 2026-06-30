@@ -1,4 +1,4 @@
-# Quick Guide — Sound Split ADSR
+# Quick Guide — ADSR_Segmenter
 
 For users who want to split instrument one-shots without reading the full technical manual.
 

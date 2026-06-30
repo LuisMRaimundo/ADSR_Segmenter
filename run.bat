@@ -1,15 +1,15 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-title Sound Split ADSR
+title ADSR_Segmenter
 
 if not exist "split_audio_segments.py" (
-    echo Keep run.bat in the Sound Split ADSR folder ^(next to split_audio_segments.py^).
+    echo Keep run.bat in the ADSR_Segmenter folder ^(next to split_audio_segments.py^).
     pause
     exit /b 1
 )
 
-echo Starting Sound Split ADSR...
+echo Starting ADSR_Segmenter...
 
 where py >nul 2>&1
 if %ERRORLEVEL% equ 0 (

@@ -1,5 +1,5 @@
 """
-Optimized Audio Segment Splitter - Attack, Sustain, Decay, Release Detection
+ADSR_Segmenter — Attack, Sustain, Decay, Release detection and segmentation.
 
 Features:
 - Smart energy-guided detection (default) with proportional anchors
@@ -33,9 +33,9 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 
-class OptimizedAudioSplitter:
+class ADSRSegmenter:
     """
-    Optimized audio segment splitter with energy-based detection algorithms.
+    ADSR_Segmenter desktop application with energy-based detection algorithms.
     """
     
     # Supported audio formats (librosa can handle most common formats)
@@ -60,7 +60,7 @@ class OptimizedAudioSplitter:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("Optimized Audio Segment Splitter v3.0 - Smart Detection")
+        self.root.title("ADSR_Segmenter v3.1 — Smart Detection")
         self.root.geometry("1000x850")
         
         # Configuration
@@ -1131,7 +1131,7 @@ class OptimizedAudioSplitter:
 
 def main() -> None:
     root = tk.Tk()
-    OptimizedAudioSplitter(root)
+    ADSRSegmenter(root)
     root.mainloop()
 
 

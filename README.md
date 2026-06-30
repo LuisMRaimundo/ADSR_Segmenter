@@ -1,6 +1,6 @@
-# Sound Split ADSR
+# ADSR_Segmenter
 
-**Repository:** [github.com/LuisMRaimundo/Sound_split_ADSR](https://github.com/LuisMRaimundo/Sound_split_ADSR)
+**Repository:** [github.com/LuisMRaimundo/ADSR_Segmenter](https://github.com/LuisMRaimundo/ADSR_Segmenter)
 
 Desktop tool for **automatic ADSR segmentation** of monophonic or quasi-monophonic audio (orchestral one-shots, sample-library prep, spectral-analysis pipelines). Splits each file into **Attack**, **Sustain**, **Decay**, and **Release** regions with optional manual review, JSON/CSV metadata, and a boundary-error benchmark.
 
@@ -18,7 +18,7 @@ See **[installers/README.md](installers/README.md)**:
 | **macOS** | Double-click `installers/macos/Install and Run.command` (after `chmod +x`) |
 | **Linux** | `./installers/linux/install-and-run.sh` |
 
-First run downloads a private Python and libraries (~150–250 MB), then opens the **graphical ADSR splitter**. No system Python, pip, or conda required.
+First run downloads a private Python and libraries (~150–250 MB), then opens the **ADSR_Segmenter** graphical interface. No system Python, pip, or conda required.
 
 ---
 
@@ -34,7 +34,7 @@ python run_benchmark.py --generate-corpus && python run_benchmark.py
 pytest
 ```
 
-Entry points after install: `sound-split-adsr-gui`, `sound-split-adsr-cli`, `sound-split-adsr-benchmark`.
+Entry points after install: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-segmenter-benchmark`.
 
 **MP3/M4A:** install [ffmpeg](https://ffmpeg.org/) on your PATH.
 

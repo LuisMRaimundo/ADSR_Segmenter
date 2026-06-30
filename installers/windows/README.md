@@ -1,6 +1,6 @@
-# Sound Split ADSR - Windows installation
+# ADSR_Segmenter - Windows installation
 
-**Repository:** https://github.com/LuisMRaimundo/Sound_split_ADSR
+**Repository:** https://github.com/LuisMRaimundo/ADSR_Segmenter
 
 ## Standard installation (no Python required)
 
@@ -8,7 +8,7 @@
 2. Open **`installers\windows`**.
 3. Double-click **`INSTALL.bat`** or **`START-HERE.bat`** (same as **Install and Run.bat**).
 4. Wait for setup to finish (first run: **10-25 minutes**, downloads portable Python with Tkinter).
-5. The ADSR splitter GUI opens when ready.
+5. The ADSR_Segmenter GUI opens when ready.
 
 **Do not** use an old ZIP saved before May 2026.
 

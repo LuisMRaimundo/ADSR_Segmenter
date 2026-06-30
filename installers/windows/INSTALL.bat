@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-title Sound Split ADSR - Installer
+title ADSR_Segmenter - Installer
 cd /d "%~dp0\..\.." || (
   echo ERROR: Cannot find project root.
   pause
@@ -10,10 +10,10 @@ cd /d "%~dp0\..\.." || (
 echo.
 echo  *** USE THIS FILE FOR NORMAL INSTALL ***
 echo.
-echo  Sound Split ADSR
+echo  ADSR_Segmenter
 echo  ================
 echo.
-echo  GitHub: https://github.com/LuisMRaimundo/Sound_split_ADSR
+echo  GitHub: https://github.com/LuisMRaimundo/ADSR_Segmenter
 echo.
 echo  First run downloads portable Python with Tkinter and libraries.
 echo  Do not close this window until finished.

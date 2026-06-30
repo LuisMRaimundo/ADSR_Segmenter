@@ -7,7 +7,7 @@ ROOT="$(pwd)"
 export ROOT
 
 echo ""
-echo " Sound Split ADSR"
+echo " ADSR_Segmenter"
 echo " ================"
 echo ""
 

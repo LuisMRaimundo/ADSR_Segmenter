@@ -1,7 +1,7 @@
-# Sound Split ADSR — Comprehensive Technical Manual
+# ADSR_Segmenter — Comprehensive Technical Manual
 
-**Version:** 3.1.0 (`sound-split-adsr`)  
-**Repository:** [github.com/LuisMRaimundo/Sound_split_ADSR](https://github.com/LuisMRaimundo/Sound_split_ADSR)  
+**Version:** 3.1.0 (`adsr-segmenter`)  
+**Repository:** [github.com/LuisMRaimundo/ADSR_Segmenter](https://github.com/LuisMRaimundo/ADSR_Segmenter)  
 **Audience:** Musicologists, acousticians, sound designers, and software engineers  
 **Copyright:** © 2026 Luís Raimundo. Proprietary research software — see `# Copyright and Use Notice.md`.
 
@@ -887,7 +887,7 @@ python split_audio_segments.py          # GUI
 python split_audio_cli.py -f ./samples  # headless batch
 ```
 
-Entry points: `sound-split-adsr-gui`, `sound-split-adsr-cli`, `sound-split-adsr-benchmark`.
+Entry points: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-segmenter-benchmark`.
 
 ### 13.2 CLI flags
 
@@ -1076,7 +1076,7 @@ print(f"Boundaries: att={result.t_att:.3f}s, dec={result.t_dec:.3f}s, end={resul
 ### Tutorial G — Running tests
 
 ```bash
-cd "path/to/Sound Split ADSR"
+cd "path/to/ADSR_Segmenter"
 pytest
 ```
 
@@ -1154,4 +1154,4 @@ DEFAULT_SUSTAIN_FRACTION_BEFORE_DECAY = 0.75
 
 ---
 
-*Document for Sound Split ADSR v3.1.0. Synchronized with `audio_segment_core.py`, `ALL_PRESETS`, and `SegmentConfig`. Last updated: June 2026.*
+*Document for ADSR_Segmenter v3.1.0. Synchronized with `audio_segment_core.py`, `ALL_PRESETS`, and `SegmentConfig`. Last updated: June 2026.*

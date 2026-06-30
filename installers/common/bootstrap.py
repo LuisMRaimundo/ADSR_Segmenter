@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bootstrap portable Python + Sound Split ADSR dependencies, then launch the Tkinter GUI.
+Bootstrap portable Python + ADSR_Segmenter dependencies, then launch the Tkinter GUI.
 
 Used by installers/windows, installers/macos, installers/linux launchers.
 """
@@ -153,7 +153,7 @@ def ensure_app_installed(py: Path) -> None:
         except OSError:
             pass
 
-    _log("Installing Sound Split ADSR and dependencies (first run may take several minutes) …")
+    _log("Installing ADSR_Segmenter and dependencies (first run may take several minutes) …")
     _run([str(py), "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools"])
     _run(
         [str(py), "-m", "pip", "install", "-e", str(PROJECT_ROOT)],
@@ -183,7 +183,7 @@ def launch_gui(py: Path) -> int:
         return 1
     env = os.environ.copy()
     env["PYTHONPATH"] = str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
-    _log("Starting Sound Split ADSR (Tkinter window).")
+    _log("Starting ADSR_Segmenter (Tkinter window).")
     _log("Close the window to exit.")
     return subprocess.call([str(py), str(APP_MODULE)], cwd=PROJECT_ROOT, env=env)
 
@@ -219,7 +219,7 @@ def cmd_doctor(_: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Sound Split ADSR bootstrap")
+    parser = argparse.ArgumentParser(description="ADSR_Segmenter bootstrap")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("setup", help="Download portable Python and install dependencies").set_defaults(func=cmd_setup)
     sub.add_parser("launch", help="Setup if needed, then start GUI").set_defaults(func=cmd_launch)

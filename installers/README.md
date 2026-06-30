@@ -2,7 +2,7 @@
 
 **Already have Python 3.10+?** Use **`run.bat`** at the repository root (Windows) or `python split_audio_segments.py` — no download needed.
 
-These launchers install a **private copy** of Python and all app libraries on **first run**, then open the **Sound Split ADSR** desktop window. You do **not** need Python, pip, or conda on your computer.
+These launchers install a **private copy** of Python and all app libraries on **first run**, then open the **ADSR_Segmenter** desktop window. You do **not** need Python, pip, or conda on your computer.
 
 **Requirements:** Internet on first run (~150–250 MB download). Disk space ~500 MB after install. Windows 10/11, macOS 11+, or a recent Linux (x86_64 or arm64).
 
@@ -16,7 +16,7 @@ These launchers install a **private copy** of Python and all app libraries on **
    **`installers\windows\Install and Run.bat`**
 
 3. Wait for the first-time setup to finish (several minutes).
-4. The ADSR splitter window opens. Keep the console window open while you use the app.
+4. The ADSR_Segmenter window opens. Keep the console window open while you use the app.
 
 To stop: close the GUI window, then close the console or press **Ctrl+C**.
 

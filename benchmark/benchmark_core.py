@@ -273,7 +273,7 @@ def aggregate_evaluations(
 def format_report_table(report: BenchmarkReport) -> str:
     lines = [
         "",
-        f"ADSR Boundary Benchmark  |  tolerance +/-{report.tolerance_ms:.0f} ms  |  {report.created_at}",
+        f"ADSR_Segmenter Boundary Benchmark  |  tolerance +/-{report.tolerance_ms:.0f} ms  |  {report.created_at}",
         f"Corpus: {report.corpus_dir}",
         "",
         f"{'Mode':<14} {'Preset':<28} {'Pitch':<10} {'N':>3} "

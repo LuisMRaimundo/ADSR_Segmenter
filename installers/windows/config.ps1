@@ -1,7 +1,7 @@
-# Sound Split ADSR - Windows installer constants
-$script:SoundSplitConfig = @{
-    GitHubRepoUrl      = 'https://github.com/LuisMRaimundo/Sound_split_ADSR'
-    AppName            = 'Sound Split ADSR'
+# ADSR_Segmenter - Windows installer constants
+$script:ADSRSegmenterConfig = @{
+    GitHubRepoUrl      = 'https://github.com/LuisMRaimundo/ADSR_Segmenter'
+    AppName            = 'ADSR_Segmenter'
     PythonVersion      = '3.11'
     PythonMinMinor     = 10
     PythonMaxMinor     = 12
