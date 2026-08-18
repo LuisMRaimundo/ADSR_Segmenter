@@ -28,6 +28,14 @@ SMART_PROP_BLEND = 0.3
 DEFAULT_VIBRATO_MEDIAN_WINDOW_S = 0.12
 DEFAULT_PITCH_REFINE_MIN_FRACTION = 0.70
 DEFAULT_SUSTAIN_FRACTION_BEFORE_DECAY = 0.75  # min % through proportional sustain before decay
+DEFAULT_PITCH_FMIN_HZ = 30.0
+DEFAULT_PITCH_FMAX_HZ = 4200.0
+DEFAULT_PITCH_FAIL_CENTS = 50.0
+DEFAULT_PITCH_OCTAVE_FAIL_CENTS = 300.0
+DEFAULT_PITCH_MIN_VOICED_FRACTION = 0.5
+DEFAULT_REGIME_HI_REL_BANDWIDTH = 0.15
+DEFAULT_REGIME_HI_RISE_DB = 10.0
+NOTE_WRAP_SPELLINGS = {("B", "#"), ("C", "b"), ("E", "#"), ("F", "b")}
 
 SUPPORTED_AUDIO_EXTENSIONS = {
     ".wav", ".mp3", ".flac", ".aif", ".aiff", ".ogg", ".m4a", ".wma", ".mp4", ".mka",
@@ -150,6 +158,10 @@ _REGIME_ANNOTATE_KEYS = {
     "regime_min_duration": 1.0,
     "regime_analysis_n_fft": None,
     "regime_half_integer": True,
+    "regime_use_half_integer": True,
+    "regime_hi_rel_bandwidth": DEFAULT_REGIME_HI_REL_BANDWIDTH,
+    "regime_hi_rise_db": DEFAULT_REGIME_HI_RISE_DB,
+    "regime_vibrato_robust": True,
 }
 
 for _preset in PRESETS.values():
@@ -204,8 +216,16 @@ class SegmentConfig:
     regime_reference_fraction: float = 0.5      # central fraction of the pitch-stable sustain used as reference
     regime_min_windows: int = 20                # floor: minimum non-overlapping analysis windows after trim
     regime_min_duration: float = 1.0            # floor: minimum seconds after trim
-    regime_analysis_n_fft: Optional[int] = None # downstream STFT size; if None use cfg.frame_length
+    regime_analysis_n_fft: Optional[int] = None # downstream STFT size; if None use pitch frame
     regime_half_integer: bool = True            # also compute the half-integer band ratio (needs f0)
+    regime_hi_rel_bandwidth: float = DEFAULT_REGIME_HI_REL_BANDWIDTH
+    regime_use_half_integer: bool = True
+    regime_hi_rise_db: float = DEFAULT_REGIME_HI_RISE_DB
+    regime_vibrato_robust: bool = True
+    pitch_fmin: float = DEFAULT_PITCH_FMIN_HZ
+    pitch_fmax: float = DEFAULT_PITCH_FMAX_HZ
+    pitch_fail_cents: float = DEFAULT_PITCH_FAIL_CENTS
+    pitch_min_voiced_fraction: float = DEFAULT_PITCH_MIN_VOICED_FRACTION
 
     @classmethod
     def from_preset(cls, name: str, **overrides) -> "SegmentConfig":
@@ -236,6 +256,18 @@ class SegmentConfig:
             "regime_min_duration": preset.get("regime_min_duration", 1.0),
             "regime_analysis_n_fft": preset.get("regime_analysis_n_fft"),
             "regime_half_integer": preset.get("regime_half_integer", True),
+            "regime_use_half_integer": preset.get("regime_use_half_integer", True),
+            "regime_hi_rel_bandwidth": preset.get(
+                "regime_hi_rel_bandwidth", DEFAULT_REGIME_HI_REL_BANDWIDTH
+            ),
+            "regime_hi_rise_db": preset.get("regime_hi_rise_db", DEFAULT_REGIME_HI_RISE_DB),
+            "regime_vibrato_robust": preset.get("regime_vibrato_robust", True),
+            "pitch_fmin": preset.get("pitch_fmin", DEFAULT_PITCH_FMIN_HZ),
+            "pitch_fmax": preset.get("pitch_fmax", DEFAULT_PITCH_FMAX_HZ),
+            "pitch_fail_cents": preset.get("pitch_fail_cents", DEFAULT_PITCH_FAIL_CENTS),
+            "pitch_min_voiced_fraction": preset.get(
+                "pitch_min_voiced_fraction", DEFAULT_PITCH_MIN_VOICED_FRACTION
+            ),
         }
         fields.update(overrides)
         return cls(**fields)
@@ -292,10 +324,19 @@ def compute_spectral_flux(
     frame_length: int = DEFAULT_FRAME_LENGTH,
     hop_length: int = DEFAULT_HOP_LENGTH,
     n_fft: Optional[int] = None,
+    normalised: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
+    """Half-wave-rectified spectral flux.
+
+    When ``normalised`` is True, each frame's magnitude is divided by its sum
+    so flux is level-independent. The attack detector in advanced mode keeps
+    the default ``normalised=False`` so v3.1 attack MAEs do not move.
+    """
     n_fft = int(frame_length if n_fft is None else n_fft)
     stft = librosa.stft(y, n_fft=n_fft, hop_length=hop_length)
     magnitude = np.abs(stft)
+    if normalised:
+        magnitude = magnitude / (np.sum(magnitude, axis=0, keepdims=True) + 1e-12)
     diff = np.diff(magnitude, axis=1)
     flux = np.sum(np.maximum(diff, 0.0), axis=0)
     times = librosa.times_like(flux, sr=sr, hop_length=hop_length)
@@ -516,18 +557,77 @@ def effective_min_sustain_duration(
     return min_required
 
 
-def parse_note_hz_from_filename(path: Optional[Path]) -> Optional[float]:
+def parse_note_from_filename(path: Optional[Path]) -> Tuple[Optional[float], Dict]:
+    """Parse a pitch-class + octave from a filename.
+
+    Octave-wrap spellings (B#, Cb, E#, Fb) are resolved to the sounding pitch
+    (B#4 = C5, Cb5 = B4) and flagged in the returned metadata.
+    """
+    info: Dict = {
+        "note_name": None,
+        "note_name_wrap_spelling": False,
+        "expected_note_hz": None,
+    }
     if path is None:
-        return None
+        return None, info
     match = re.search(r"([A-Ga-g])(#|b)?(\d+)", path.stem)
     if not match:
-        return None
+        return None, info
     letter, accidental, octave = match.group(1).upper(), match.group(2), match.group(3)
     note_str = letter + (accidental or "") + octave
+    info["note_name"] = note_str
+    if accidental and (letter, accidental) in NOTE_WRAP_SPELLINGS:
+        info["note_name_wrap_spelling"] = True
+        logger.warning("Octave-wrap note spelling %s in %s", note_str, path.name)
     try:
-        return float(librosa.note_to_hz(note_str))
+        hz = float(librosa.note_to_hz(note_str))
     except Exception:
-        return None
+        return None, info
+    info["expected_note_hz"] = hz
+    return hz, info
+
+
+def parse_note_hz_from_filename(path: Optional[Path]) -> Optional[float]:
+    hz, _ = parse_note_from_filename(path)
+    return hz
+
+
+def next_pow2(n: float) -> int:
+    p = 1
+    need = max(1, int(np.ceil(float(n))))
+    while p < need:
+        p *= 2
+    return p
+
+
+def pitch_frame_length_for_fmin(sr: int, fmin_hz: float, cap: int = 8192) -> int:
+    """Power-of-two frame length ≥ 4·sr/fmin, capped at ``cap``."""
+    need = 4.0 * float(sr) / max(float(fmin_hz), 1.0)
+    return int(min(max(next_pow2(need), 64), cap))
+
+
+def pitch_search_range(
+    cfg: SegmentConfig,
+    expected_note_hz: Optional[float] = None,
+    file_path: Optional[Path] = None,
+    search_range: Optional[Tuple[float, float]] = None,
+) -> Tuple[float, float, Optional[float]]:
+    """Return (fmin, fmax, filename_hz). Explicit search_range wins."""
+    file_hz, _ = parse_note_from_filename(file_path)
+    if search_range is not None:
+        return float(search_range[0]), float(search_range[1]), file_hz
+    center = file_hz if file_hz and file_hz > 0 else None
+    if center is None and expected_note_hz is not None and expected_note_hz > 0:
+        center = float(expected_note_hz)
+    if center is not None:
+        # Slightly inside a full octave so yin/pyin cannot sit on the exact
+        # subharmonic (center/2), which is otherwise a legal ±1-octave bound.
+        fmin = max(float(cfg.pitch_fmin), center / 2.0 * 1.06)
+        fmax = min(float(cfg.pitch_fmax), center * 2.0 / 1.06)
+        if fmax <= fmin:
+            fmin, fmax = float(cfg.pitch_fmin), float(cfg.pitch_fmax)
+        return fmin, fmax, file_hz
+    return float(cfg.pitch_fmin), float(cfg.pitch_fmax), file_hz
 
 
 def _expand_stable_pitch_window(
@@ -563,6 +663,8 @@ def refine_sustain_by_pitch(
     t_dec_rel: float,
     cfg: SegmentConfig,
     expected_note_hz: Optional[float] = None,
+    file_path: Optional[Path] = None,
+    search_range: Optional[Tuple[float, float]] = None,
 ) -> Tuple[float, float, Dict]:
     info: Dict = {
         "used": False,
@@ -576,7 +678,19 @@ def refine_sustain_by_pitch(
         "energy_sustain_duration": None,
         "kept_energy_boundaries": False,
         "median_f0_hz": None,
+        "failed": False,
+        "failed_reason": None,
+        "note_name_wrap_spelling": False,
+        "note_name_mismatch": False,
+        "pitch_frame_length": None,
+        "pitch_fmin": None,
+        "pitch_fmax": None,
     }
+    file_hz, file_meta = parse_note_from_filename(file_path)
+    info["note_name_wrap_spelling"] = bool(file_meta.get("note_name_wrap_spelling"))
+    if expected_note_hz is None and file_hz is not None:
+        expected_note_hz = file_hz
+        info["expected_note_hz"] = expected_note_hz
     if not cfg.use_pitch_refine:
         info["kept_energy_boundaries"] = True
         return t_att_rel, t_dec_rel, info
@@ -598,17 +712,33 @@ def refine_sustain_by_pitch(
     start_idx = int(sustain_start * sr)
     end_idx = int(sustain_end * sr)
     y_sustain = y_trimmed[start_idx:end_idx]
-    if len(y_sustain) < cfg.frame_length:
+    fmin_hz, fmax_hz, file_hz = pitch_search_range(cfg, expected_note_hz, file_path, search_range)
+    has_note_context = search_range is None and (
+        (file_hz is not None and file_hz > 0)
+        or (expected_note_hz is not None and expected_note_hz > 0)
+    )
+    # Scale the YIN frame with register when a note or an explicit search
+    # range is given. Unnamed files keep the historical 1024-sample grain
+    # so v3.2 expand-mode benchmark rows do not move.
+    pitch_n = (
+        pitch_frame_length_for_fmin(sr, fmin_hz)
+        if (has_note_context or search_range is not None)
+        else int(cfg.frame_length)
+    )
+    info["pitch_fmin"] = float(fmin_hz)
+    info["pitch_fmax"] = float(fmax_hz)
+    info["pitch_frame_length"] = int(pitch_n)
+    if len(y_sustain) < min(cfg.frame_length, pitch_n):
         info["kept_energy_boundaries"] = True
         return t_att_rel, t_dec_rel, info
 
     try:
         f0 = librosa.yin(
             y_sustain,
-            fmin=librosa.note_to_hz("A0"),
-            fmax=librosa.note_to_hz("C8"),
+            fmin=float(fmin_hz),
+            fmax=float(fmax_hz),
             sr=sr,
-            frame_length=cfg.frame_length,
+            frame_length=int(pitch_n),
             hop_length=cfg.hop_length,
         )
     except Exception:
@@ -618,14 +748,39 @@ def refine_sustain_by_pitch(
     times = librosa.times_like(f0, sr=sr, hop_length=cfg.hop_length)
     valid = np.isfinite(f0) & (f0 > 0)
     if valid.sum() < 3:
+        info["failed"] = True
+        info["failed_reason"] = "unvoiced"
         info["kept_energy_boundaries"] = True
+        info["median_f0_hz"] = None
         return t_att_rel, t_dec_rel, info
 
     f0_med = float(np.median(f0[valid]))
-    info["median_f0_hz"] = f0_med
     if f0_med <= 0:
         info["kept_energy_boundaries"] = True
         return t_att_rel, t_dec_rel, info
+
+    consistent = valid & (np.abs(1200.0 * np.log2(np.maximum(f0, 1e-12) / f0_med)) < 200.0)
+    voiced_frac = float(consistent.sum()) / max(len(f0), 1)
+    if voiced_frac < float(cfg.pitch_min_voiced_fraction):
+        info["failed"] = True
+        info["failed_reason"] = "unvoiced"
+        info["kept_energy_boundaries"] = True
+        info["median_f0_hz"] = None
+        return t_att_rel, t_dec_rel, info
+    info["median_f0_hz"] = f0_med
+
+    if expected_note_hz is not None and expected_note_hz > 0:
+        cents_off = abs(1200.0 * np.log2(f0_med / float(expected_note_hz)))
+        if cents_off > DEFAULT_PITCH_OCTAVE_FAIL_CENTS:
+            info["failed"] = True
+            info["failed_reason"] = "octave_error"
+            info["note_name_mismatch"] = True
+            info["kept_energy_boundaries"] = True
+            info["std_cents"] = None
+            info["median_f0_hz"] = f0_med
+            return t_att_rel, t_dec_rel, info
+        if info["note_name_wrap_spelling"] and cents_off > 50.0:
+            info["note_name_mismatch"] = True
 
     cents = np.full_like(f0, np.nan, dtype=np.float64)
     cents[valid] = 1200.0 * np.log2(f0[valid] / f0_med)
@@ -664,6 +819,15 @@ def refine_sustain_by_pitch(
 
     if best_std is None or best_start is None:
         info["kept_energy_boundaries"] = True
+        return t_att_rel, t_dec_rel, info
+
+    fail_std = best_std
+    if fail_std is not None and fail_std > float(cfg.pitch_fail_cents):
+        info["std_cents"] = float(fail_std)
+        info["failed"] = True
+        info["failed_reason"] = "tracking_failed"
+        info["kept_energy_boundaries"] = True
+        info["median_f0_hz"] = f0_med
         return t_att_rel, t_dec_rel, info
 
     seed_lo = best_start
@@ -732,27 +896,53 @@ def refine_sustain_by_pitch(
     return t_att_rel, t_dec_rel, info
 
 
+def resolve_analysis_n_fft(
+    cfg: SegmentConfig, pitch_frame_length: Optional[int] = None
+) -> Tuple[int, str]:
+    if cfg.regime_analysis_n_fft is not None and int(cfg.regime_analysis_n_fft) > 0:
+        return int(cfg.regime_analysis_n_fft), "config"
+    if pitch_frame_length is not None and int(pitch_frame_length) > 0:
+        return int(pitch_frame_length), "pitch_frame"
+    return int(cfg.frame_length), "frame_length"
+
+
 def compute_half_integer_ratio_db(
     y: np.ndarray,
     sr: int,
     f0_hz: Optional[float],
     cfg: SegmentConfig,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """Per-frame energy in ±60 Hz bands around 1.5·f0 and 2.5·f0, relative to the ±15 Hz band around f0, in dB.
+    n_fft: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray, Dict]:
+    """Per-frame 1.5·f0 + 2.5·f0 energy vs f0, in dB, with bands ±α·f0.
 
-    Returns (ratio_db, times). NaN where f0 is None.
+    Returns (ratio_db, times, status). NaN where unresolvable or f0 is missing.
     """
-    n_fft = int(cfg.frame_length)
+    n_fft = int(cfg.frame_length if n_fft is None else n_fft)
     hop = int(cfg.hop_length)
+    alpha = float(cfg.regime_hi_rel_bandwidth)
     stft = librosa.stft(y, n_fft=n_fft, hop_length=hop)
     magnitude = np.abs(stft)
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
     times = librosa.times_like(magnitude, sr=sr, hop_length=hop)
     n_frames = int(magnitude.shape[1])
+    status: Dict = {
+        "half_integer_valid": False,
+        "reason": None,
+        "half_integer_bandwidth_hz": None,
+        "n_fft": n_fft,
+    }
+    nan = np.full(n_frames, np.nan, dtype=np.float64)
     if f0_hz is None or not np.isfinite(f0_hz) or float(f0_hz) <= 0:
-        return np.full(n_frames, np.nan, dtype=np.float64), times
+        status["reason"] = "no_f0"
+        return nan, times, status
 
     f0 = float(f0_hz)
+    bandwidth = alpha * f0
+    status["half_integer_bandwidth_hz"] = bandwidth
+    bin_hz = float(sr) / float(n_fft)
+    if bandwidth < 2.0 * bin_hz:
+        status["reason"] = "band_below_resolution"
+        return nan, times, status
 
     def _band_energy(center_hz: float, half_width_hz: float) -> np.ndarray:
         mask = (freqs >= center_hz - half_width_hz) & (freqs <= center_hz + half_width_hz)
@@ -760,23 +950,28 @@ def compute_half_integer_ratio_db(
             return np.zeros(n_frames, dtype=np.float64)
         return np.sum(magnitude[mask, :] ** 2, axis=0)
 
-    e_f0 = _band_energy(f0, 15.0)
-    e_half = _band_energy(1.5 * f0, 60.0) + _band_energy(2.5 * f0, 60.0)
+    e_f0 = _band_energy(f0, bandwidth)
+    e_half = _band_energy(1.5 * f0, bandwidth) + _band_energy(2.5 * f0, bandwidth)
     ratio_db = np.full(n_frames, np.nan, dtype=np.float64)
     valid = e_f0 > 1e-20
     ratio_db[valid] = 10.0 * np.log10(np.maximum(e_half[valid], 1e-20) / e_f0[valid])
-    return ratio_db, times
+    status["half_integer_valid"] = True
+    status["reason"] = None
+    return ratio_db, times, status
 
 
-def effective_regime_floor(cfg: SegmentConfig, sr: int) -> float:
+def effective_regime_floor(
+    cfg: SegmentConfig, sr: int, analysis_n_fft: Optional[int] = None
+) -> float:
     """Seconds: max(regime_min_duration, regime_min_windows * analysis_n_fft / sr)."""
-    n_fft = cfg.regime_analysis_n_fft if cfg.regime_analysis_n_fft is not None else cfg.frame_length
-    by_windows = float(cfg.regime_min_windows) * float(n_fft) / max(float(sr), 1.0)
+    if analysis_n_fft is None:
+        analysis_n_fft, _ = resolve_analysis_n_fft(cfg)
+    by_windows = float(cfg.regime_min_windows) * float(analysis_n_fft) / max(float(sr), 1.0)
     return max(float(cfg.regime_min_duration), float(by_windows))
 
 
 def _regime_info_template(cfg: SegmentConfig) -> Dict:
-    n_fft = cfg.regime_analysis_n_fft if cfg.regime_analysis_n_fft is not None else cfg.frame_length
+    n_fft, src = resolve_analysis_n_fft(cfg)
     return {
         "used": False,
         "mode": cfg.regime_refine_mode,
@@ -792,10 +987,51 @@ def _regime_info_template(cfg: SegmentConfig) -> Dict:
         "refused_reason": None,
         "floor_seconds": None,
         "floor_windows": int(cfg.regime_min_windows),
-        "analysis_n_fft": int(n_fft) if n_fft is not None else None,
+        "analysis_n_fft": int(n_fft),
+        "analysis_n_fft_source": src,
         "half_integer_ratio_db_edges": None,
         "half_integer_ratio_db_middle": None,
+        "half_integer_valid": None,
+        "half_integer_bandwidth_hz": None,
+        "hi_reference_db": None,
+        "hi_edge_rise_db_start": None,
+        "hi_edge_rise_db_end": None,
+        "hi_trimmed_start_s": None,
+        "hi_trimmed_end_s": None,
+        "boundary_source_start": None,
+        "boundary_source_end": None,
     }
+
+
+def _vibrato_smooth_track(values: np.ndarray, times: np.ndarray, cfg: SegmentConfig) -> np.ndarray:
+    """Low-pass a flux/HI track with the pitch-stage vibrato median window."""
+    out = np.asarray(values, dtype=np.float64).copy()
+    finite = np.isfinite(out)
+    if finite.sum() < 5 or not cfg.regime_vibrato_robust:
+        return out
+    t = np.asarray(times, dtype=np.float64)
+    dt = float(np.median(np.diff(t[finite]))) if finite.sum() > 1 else cfg.vibrato_median_window_s
+    if dt <= 0:
+        return out
+    win = max(3, int(round(cfg.vibrato_median_window_s / dt)) | 1)
+    if finite.sum() < win:
+        return out
+    filled = out.copy()
+    if not np.all(finite):
+        idx = np.arange(len(filled))
+        filled[~finite] = np.interp(idx[~finite], idx[finite], filled[finite])
+    return _moving_median(filled, win)
+
+
+def _walk_inward(values: np.ndarray, times: np.ndarray, above_fn) -> Tuple[int, int]:
+    n = len(values)
+    start_i = 0
+    while start_i < n and above_fn(values[start_i], start_i):
+        start_i += 1
+    end_i = n - 1
+    while end_i > start_i and above_fn(values[end_i], end_i):
+        end_i -= 1
+    return start_i, end_i
 
 
 def _median_finite(arr: np.ndarray) -> Optional[float]:
@@ -815,16 +1051,23 @@ def refine_sustain_by_regime(
     t_dec_rel: float,
     cfg: SegmentConfig,
     f0_hz: Optional[float] = None,
+    pitch_frame_length: Optional[int] = None,
 ) -> Tuple[float, float, Dict]:
     """
-    Third refinement stage. Uses spectral flux stationarity on the pitch-stable sustain.
+    Third refinement stage. Uses spectral flux stationarity on the pitch-stable sustain,
+    optionally combined with a relative half-integer walk.
     In mode 'annotate' the returned times equal the inputs and the window is reported
     in info only; in mode 'trim' the returned times are the candidate boundaries.
     """
     info = _regime_info_template(cfg)
-    floor_s = effective_regime_floor(cfg, sr)
+    analysis_n_fft, nfft_src = resolve_analysis_n_fft(cfg, pitch_frame_length)
+    info["analysis_n_fft"] = int(analysis_n_fft)
+    info["analysis_n_fft_source"] = nfft_src
+    floor_s = effective_regime_floor(cfg, sr, analysis_n_fft)
     info["floor_seconds"] = float(floor_s)
     info["used"] = True
+    info["boundary_source_start"] = "none"
+    info["boundary_source_end"] = "none"
 
     t_att_rel = float(t_att_rel)
     t_dec_rel = float(t_dec_rel)
@@ -838,6 +1081,8 @@ def refine_sustain_by_regime(
         info["window_duration"] = span
         info["trimmed_start_s"] = 0.0
         info["trimmed_end_s"] = 0.0
+        info["hi_trimmed_start_s"] = 0.0
+        info["hi_trimmed_end_s"] = 0.0
         return t_att_rel, t_dec_rel, info
 
     if span <= 0.0 or len(y_trimmed) < cfg.frame_length:
@@ -846,7 +1091,11 @@ def refine_sustain_by_regime(
         return _keep("span_below_floor")
 
     flux, times = compute_spectral_flux(
-        y_trimmed, sr, frame_length=cfg.frame_length, hop_length=cfg.hop_length
+        y_trimmed,
+        sr,
+        frame_length=cfg.frame_length,
+        hop_length=cfg.hop_length,
+        normalised=True,
     )
     mask = (times >= t_att_rel) & (times <= t_dec_rel)
     if int(np.count_nonzero(mask)) < 3:
@@ -858,30 +1107,104 @@ def refine_sustain_by_regime(
     frac = min(1.0, max(0.05, float(cfg.regime_reference_fraction)))
     lo = int(n * (1.0 - frac) / 2.0)
     hi = max(lo + 1, int(n * (1.0 + frac) / 2.0))
-    reference = float(np.median(flux_s[lo:hi]))
+
+    flux_lp = _vibrato_smooth_track(flux_s, times_s, cfg)
+    smoothed = _moving_median(flux_lp, int(cfg.regime_flux_median_frames))
+    reference = float(np.median(smoothed[lo:hi]))
     info["flux_reference"] = reference
 
-    smoothed = _moving_median(flux_s, int(cfg.regime_flux_median_frames))
     denom = max(reference, 1e-12)
     n_edge = max(1, n // 8)
     info["flux_edge_ratio_start"] = float(np.median(smoothed[:n_edge]) / denom)
     info["flux_edge_ratio_end"] = float(np.median(smoothed[-n_edge:]) / denom)
 
     threshold = float(cfg.regime_flux_ratio) * denom
-    start_i = 0
-    while start_i < n and smoothed[start_i] > threshold:
-        start_i += 1
-    end_i = n - 1
-    while end_i > start_i and smoothed[end_i] > threshold:
-        end_i -= 1
-
-    if start_i >= n:
-        cand_att, cand_dec = t_att_rel, t_dec_rel
+    flux_start_i, flux_end_i = _walk_inward(smoothed, times_s, lambda v, _i: v > threshold)
+    if flux_start_i >= n:
+        flux_att, flux_dec = t_att_rel, t_dec_rel
     else:
-        cand_att = float(times_s[start_i])
-        cand_dec = float(times_s[end_i])
-        if cand_dec < cand_att:
-            cand_att, cand_dec = t_att_rel, t_dec_rel
+        flux_att = float(times_s[flux_start_i])
+        flux_dec = float(times_s[flux_end_i])
+        if flux_dec < flux_att:
+            flux_att, flux_dec = t_att_rel, t_dec_rel
+
+    hi_att, hi_dec = t_att_rel, t_dec_rel
+    hi_db, hi_times, hi_status = compute_half_integer_ratio_db(
+        y_trimmed, sr, f0_hz, cfg, n_fft=analysis_n_fft
+    )
+    info["half_integer_valid"] = bool(hi_status.get("half_integer_valid"))
+    info["half_integer_bandwidth_hz"] = hi_status.get("half_integer_bandwidth_hz")
+    info["half_integer_reason"] = hi_status.get("reason")
+    if not info["half_integer_valid"]:
+        info["half_integer_valid"] = False
+        # reason is stored only when invalid
+    hi_mask = (hi_times >= t_att_rel) & (hi_times <= t_dec_rel)
+    hi_s = np.asarray(hi_db[hi_mask], dtype=np.float64)
+    if hi_s.size and cfg.regime_half_integer:
+        e = max(1, len(hi_s) // 8)
+        mid_lo = int(len(hi_s) * (1.0 - frac) / 2.0)
+        mid_hi = max(mid_lo + 1, int(len(hi_s) * (1.0 + frac) / 2.0))
+        info["half_integer_ratio_db_edges"] = (
+            _median_finite(hi_s[:e]),
+            _median_finite(hi_s[-e:]),
+        )
+        info["half_integer_ratio_db_middle"] = _median_finite(hi_s[mid_lo:mid_hi])
+
+    if (
+        info["half_integer_valid"]
+        and cfg.regime_use_half_integer
+        and cfg.regime_half_integer
+        and hi_s.size >= 3
+    ):
+        hi_times_s = np.asarray(hi_times[hi_mask], dtype=np.float64)
+        hi_lp = _vibrato_smooth_track(hi_s, hi_times_s, cfg)
+        hi_sm = _moving_median(hi_lp, int(cfg.regime_flux_median_frames))
+        n_hi = len(hi_sm)
+        hlo = int(n_hi * (1.0 - frac) / 2.0)
+        hhi = max(hlo + 1, int(n_hi * (1.0 + frac) / 2.0))
+        hi_ref = _median_finite(hi_sm[hlo:hhi])
+        info["hi_reference_db"] = hi_ref
+        if hi_ref is not None:
+            rise = float(cfg.regime_hi_rise_db)
+            info["hi_edge_rise_db_start"] = float(np.nanmedian(hi_sm[: max(1, n_hi // 8)]) - hi_ref)
+            info["hi_edge_rise_db_end"] = float(np.nanmedian(hi_sm[-max(1, n_hi // 8) :]) - hi_ref)
+            hs, he = _walk_inward(hi_sm, hi_times_s, lambda v, _i: (v - hi_ref) > rise)
+            if hs < n_hi:
+                hi_att = float(hi_times_s[hs])
+                hi_dec = float(hi_times_s[he])
+            info["hi_trimmed_start_s"] = max(0.0, hi_att - t_att_rel)
+            info["hi_trimmed_end_s"] = max(0.0, t_dec_rel - hi_dec)
+        else:
+            info["hi_trimmed_start_s"] = 0.0
+            info["hi_trimmed_end_s"] = 0.0
+    else:
+        if not info["half_integer_valid"]:
+            info["half_integer_valid"] = False
+        info["hi_trimmed_start_s"] = 0.0
+        info["hi_trimmed_end_s"] = 0.0
+
+    cand_att = max(flux_att, hi_att)
+    cand_dec = min(flux_dec, hi_dec)
+    if cand_dec < cand_att:
+        cand_att, cand_dec = t_att_rel, t_dec_rel
+
+    flux_trim_s = flux_att - t_att_rel
+    hi_trim_s = hi_att - t_att_rel
+    if max(flux_trim_s, hi_trim_s) <= 1e-6:
+        info["boundary_source_start"] = "none"
+    elif hi_trim_s > flux_trim_s + 1e-6:
+        info["boundary_source_start"] = "half_integer"
+    else:
+        info["boundary_source_start"] = "flux"
+
+    flux_trim_e = t_dec_rel - flux_dec
+    hi_trim_e = t_dec_rel - hi_dec
+    if max(flux_trim_e, hi_trim_e) <= 1e-6:
+        info["boundary_source_end"] = "none"
+    elif hi_trim_e > flux_trim_e + 1e-6:
+        info["boundary_source_end"] = "half_integer"
+    else:
+        info["boundary_source_end"] = "flux"
 
     cand_span = max(0.0, cand_dec - cand_att)
     info["window_start"] = cand_att
@@ -889,20 +1212,6 @@ def refine_sustain_by_regime(
     info["window_duration"] = cand_span
     info["trimmed_start_s"] = max(0.0, cand_att - t_att_rel)
     info["trimmed_end_s"] = max(0.0, t_dec_rel - cand_dec)
-
-    if cfg.regime_half_integer:
-        hi_db, hi_times = compute_half_integer_ratio_db(y_trimmed, sr, f0_hz, cfg)
-        hi_mask = (hi_times >= t_att_rel) & (hi_times <= t_dec_rel)
-        hi_s = np.asarray(hi_db[hi_mask], dtype=np.float64)
-        if hi_s.size:
-            e = max(1, len(hi_s) // 8)
-            mid_lo = int(len(hi_s) * (1.0 - frac) / 2.0)
-            mid_hi = max(mid_lo + 1, int(len(hi_s) * (1.0 + frac) / 2.0))
-            info["half_integer_ratio_db_edges"] = (
-                _median_finite(hi_s[:e]),
-                _median_finite(hi_s[-e:]),
-            )
-            info["half_integer_ratio_db_middle"] = _median_finite(hi_s[mid_lo:mid_hi])
 
     if cand_span < floor_s:
         info["refused"] = True
@@ -923,22 +1232,35 @@ def build_regime_flux_sidecar(
     t_start: float,
     t_end: float,
     f0_hz: Optional[float] = None,
+    pitch_frame_length: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Flux + half-integer tracks on the sustain frame grid (times relative to t_start)."""
     i0 = max(0, int(round(float(t_start) * sr)))
     i1 = min(len(y), max(i0 + 1, int(round(float(t_end) * sr))))
     y_s = y[i0:i1]
+    analysis_n_fft, _ = resolve_analysis_n_fft(cfg, pitch_frame_length)
     flux, times = compute_spectral_flux(
-        y_s, sr, frame_length=cfg.frame_length, hop_length=cfg.hop_length
+        y_s, sr, frame_length=cfg.frame_length, hop_length=cfg.hop_length, normalised=True
     )
+    hi_status: Dict = {"half_integer_valid": False, "half_integer_bandwidth_hz": None}
     if cfg.regime_half_integer:
-        hi_db, hi_times = compute_half_integer_ratio_db(y_s, sr, f0_hz, cfg)
+        hi_db, hi_times, hi_status = compute_half_integer_ratio_db(
+            y_s, sr, f0_hz, cfg, n_fft=analysis_n_fft
+        )
         n = min(len(flux), len(hi_db), len(times), len(hi_times))
         flux, times, hi_db = flux[:n], times[:n], hi_db[:n]
     else:
         hi_db = np.full(len(flux), np.nan, dtype=np.float64)
         n = len(flux)
         times = times[:n]
+    flux_sm = _moving_median(
+        _vibrato_smooth_track(np.asarray(flux, dtype=np.float64), np.asarray(times), cfg),
+        int(cfg.regime_flux_median_frames),
+    )
+    hi_sm = _moving_median(
+        _vibrato_smooth_track(np.asarray(hi_db, dtype=np.float64), np.asarray(times), cfg),
+        int(cfg.regime_flux_median_frames),
+    )
     return {
         "sr": int(sr),
         "hop_length": int(cfg.hop_length),
@@ -947,6 +1269,15 @@ def build_regime_flux_sidecar(
         "flux": [float(v) for v in flux],
         "half_integer_ratio_db": [
             None if not np.isfinite(v) else float(v) for v in hi_db
+        ],
+        "flux_normalised": True,
+        "half_integer_valid": bool(hi_status.get("half_integer_valid")),
+        "hi_bandwidth_hz": hi_status.get("half_integer_bandwidth_hz"),
+        "f0_hz": None if f0_hz is None else float(f0_hz),
+        "pitch_frame_length": None if pitch_frame_length is None else int(pitch_frame_length),
+        "flux_smoothed": [float(v) for v in flux_sm],
+        "half_integer_ratio_db_smoothed": [
+            None if not np.isfinite(v) else float(v) for v in hi_sm
         ],
     }
 
@@ -1054,10 +1385,12 @@ def detect_segments(
                 active_len, cfg.attack_pct, cfg.sustain_pct, cfg.decay_pct, min_sustain
             )
 
-        expected_hz = parse_note_hz_from_filename(file_path)
+        expected_hz, file_meta = parse_note_from_filename(file_path)
         t_att_rel, t_dec_rel, pitch_info = refine_sustain_by_pitch(
-            y_trimmed, sr, t_att_rel, t_dec_rel, cfg, expected_hz
+            y_trimmed, sr, t_att_rel, t_dec_rel, cfg, expected_hz, file_path=file_path
         )
+        if file_meta.get("note_name_wrap_spelling"):
+            pitch_info["note_name_wrap_spelling"] = True
         t_att_rel, t_dec_rel = _clamp_segment_rel(t_att_rel, t_dec_rel, active_len, min_sustain)
         if pitch_info.get("used"):
             pitch_info["window_start"] = trim.t_start + pitch_info["window_start"]
@@ -1066,9 +1399,18 @@ def detect_segments(
         regime_info: Dict = {}
         source_att_rel, source_dec_rel = t_att_rel, t_dec_rel
         if cfg.use_regime_refine:
-            f0_for_regime = pitch_info.get("median_f0_hz") or expected_hz
+            if pitch_info.get("failed"):
+                f0_for_regime = None
+            else:
+                f0_for_regime = pitch_info.get("median_f0_hz") or expected_hz
             new_att, new_dec, regime_info = refine_sustain_by_regime(
-                y_trimmed, sr, t_att_rel, t_dec_rel, cfg, f0_for_regime
+                y_trimmed,
+                sr,
+                t_att_rel,
+                t_dec_rel,
+                cfg,
+                f0_for_regime,
+                pitch_frame_length=pitch_info.get("pitch_frame_length"),
             )
             if cfg.regime_refine_mode == "trim":
                 t_att_rel, t_dec_rel = new_att, new_dec
@@ -1329,10 +1671,11 @@ def process_audio_file(
 
     sidecar_path = None
     if write_flux_sidecar:
-        f0_hz = (result.pitch_refine or {}).get("median_f0_hz") or (
-            result.pitch_refine or {}
-        ).get("expected_note_hz")
-        payload = build_regime_flux_sidecar(y, sr, cfg, t_att_std, t_dec_std, f0_hz)
+        pr = result.pitch_refine or {}
+        f0_hz = None if pr.get("failed") else (pr.get("median_f0_hz") or pr.get("expected_note_hz"))
+        payload = build_regime_flux_sidecar(
+            y, sr, cfg, t_att_std, t_dec_std, f0_hz, pitch_frame_length=pr.get("pitch_frame_length")
+        )
         sidecar_path = output_dir / f"{input_path.stem}.flux.json"
         sidecar_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
