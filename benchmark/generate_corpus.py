@@ -1,5 +1,5 @@
 """
-Generate a reproducible synthetic benchmark corpus (~40 one-shots) with known ADSR boundaries.
+Generate a reproducible synthetic benchmark corpus (40 one-shots plus 4 regime items) with known ADSR boundaries.
 
 WAV files + annotations.json are written to benchmark/corpus/ by default.
 """
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import soundfile as sf
@@ -77,6 +77,9 @@ def _synthesize(
     vib_rate: float = 0.0,
     vib_depth_cents: float = 0.0,
     attack_noise: float = 0.0,
+    unstable_onset_s: float = 0.0,
+    burst_at_s: Optional[float] = None,
+    style: str = "bow",
 ) -> Tuple[np.ndarray, Dict[str, float]]:
     n_gap = int(gap_s * sr)
     n_att = int(attack_s * sr)
@@ -101,12 +104,48 @@ def _synthesize(
         noise *= np.linspace(1, 0, n_att)
         tone[:n_att] += noise
 
+    if style == "brass":
+        for k, amp in ((2, 0.22), (3, 0.12), (4, 0.07)):
+            tone += amp * np.sin(2 * np.pi * k * freq * t_body) * env
+    elif style == "flute":
+        tone += 0.08 * np.sin(2 * np.pi * 2 * freq * t_body) * env
+
+    if unstable_onset_s > 0:
+        n_u = min(len(tone), int(unstable_onset_s * sr))
+        t_u = np.arange(n_u) / sr
+        am = 0.55 + 0.45 * np.sin(2 * np.pi * 14.0 * t_u) + 0.25 * np.sin(2 * np.pi * 27.0 * t_u)
+        hi_amp = 0.10 if style == "flute" else 0.16
+        tone[:n_u] += hi_amp * am * (
+            np.sin(2 * np.pi * 1.5 * freq * t_u) + np.sin(2 * np.pi * 2.5 * freq * t_u)
+        )
+
+    if burst_at_s is not None:
+        i0 = int(burst_at_s * sr)
+        n_b = int(0.10 * sr)
+        i1 = min(len(tone), i0 + n_b)
+        if i1 > i0:
+            t_b = np.arange(i1 - i0) / sr
+            am_b = 0.55 + 0.45 * np.sin(2 * np.pi * 18.0 * t_b)
+            tone[i0:i1] += 0.14 * am_b * (
+                np.sin(2 * np.pi * 1.5 * freq * t_b) + np.sin(2 * np.pi * 3.5 * freq * t_b)
+            )
+
     y = np.concatenate([np.zeros(n_gap), tone, np.zeros(n_gap)])
     t_start = gap_s
     t_att = t_start + attack_s
     t_dec = t_att + sustain_s
     t_end = t_dec + decay_s
-    return y, {"t_start": t_start, "t_att": t_att, "t_dec": t_dec, "t_end": t_end}
+    stable_start = t_start + unstable_onset_s if unstable_onset_s > 0 else t_att
+    stable_start = max(t_att, stable_start)
+    times = {
+        "t_start": t_start,
+        "t_att": t_att,
+        "t_dec": t_dec,
+        "t_end": t_end,
+        "stable_sustain_start": stable_start,
+        "stable_sustain_end": t_dec,
+    }
+    return y, times
 
 
 def generate_corpus(output_dir: Path, seed: int = 42) -> Path:
@@ -143,10 +182,46 @@ def generate_corpus(output_dir: Path, seed: int = 42) -> Path:
             }
         )
 
+    # Four extra regime-labelled one-shots. Original 40 specs are untouched.
+    regime_specs = [
+        (0.08, 1.60, 0.28, 0.12, 523.25, "brass", 0.40, 0.95),
+        (0.10, 1.80, 0.30, 0.14, 587.33, "brass", 0.38, 1.10),
+        (0.07, 1.50, 0.25, 0.12, 659.25, "flute", 0.36, 0.90),
+        (0.09, 1.70, 0.27, 0.13, 783.99, "flute", 0.42, 1.05),
+    ]
+    for extra_i, spec in enumerate(regime_specs, start=1):
+        att, sus, dec, gap, freq, style, unstable, burst = spec
+        y, times = _synthesize(
+            SR, att, sus, dec, gap, freq,
+            attack_noise=0.0,
+            unstable_onset_s=unstable,
+            burst_at_s=burst,
+            style=style,
+        )
+        y = core.preprocess_signal(y, remove_dc=True)
+        _, trim = core.trim_active_region(y, SR, core.DEFAULT_TRIM_DB)
+        name = f"syn_regime_{extra_i:03d}.wav"
+        sf.write(output_dir / name, y, SR)
+        samples.append(
+            {
+                "id": f"syn_regime_{extra_i:03d}",
+                "file": name,
+                "sr": SR,
+                "t_att": round(times["t_att"], 6),
+                "t_dec": round(times["t_dec"], 6),
+                "t_end": round(trim.t_end, 6),
+                "preset": "soft_high_brass",
+                "category": "regime",
+                "notes": f"style={style} freq={freq}Hz unstable_onset={unstable}s burst_at={burst}s",
+                "stable_sustain_start": round(times["stable_sustain_start"], 6),
+                "stable_sustain_end": round(times["stable_sustain_end"], 6),
+            }
+        )
+
     ann_path = output_dir / "annotations.json"
     payload = {
         "version": 1,
-        "description": "Synthetic ADSR benchmark corpus (40 one-shots, reproducible)",
+        "description": "Synthetic ADSR benchmark corpus (40 one-shots + 4 regime items, reproducible)",
         "sr_default": SR,
         "samples": samples,
     }
@@ -157,4 +232,5 @@ def generate_corpus(output_dir: Path, seed: int = 42) -> Path:
 if __name__ == "__main__":
     root = Path(__file__).resolve().parent / "corpus"
     path = generate_corpus(root)
-    print(f"Generated {len(SYNTHETIC_SPECS)} samples -> {path}")
+    n = len(json.loads(path.read_text(encoding="utf-8"))["samples"])
+    print(f"Generated {n} samples -> {path}")

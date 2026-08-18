@@ -51,6 +51,15 @@ def build_config(args: argparse.Namespace) -> core.SegmentConfig:
         cfg.pitch_refine_mode = args.pitch_refine_mode
     if args.no_vibrato_robust:
         cfg.vibrato_robust = False
+    if args.regime_mode == "off":
+        cfg.use_regime_refine = False
+    elif args.regime_mode:
+        cfg.use_regime_refine = True
+        cfg.regime_refine_mode = args.regime_mode
+    if args.regime_flux_ratio is not None:
+        cfg.regime_flux_ratio = args.regime_flux_ratio
+    if args.regime_analysis_n_fft is not None:
+        cfg.regime_analysis_n_fft = args.regime_analysis_n_fft
     return cfg
 
 
@@ -93,6 +102,8 @@ def export_metadata(folder: Path, results: List[Dict[str, Any]], cfg: core.Segme
                         "release": info["dur_rel"],
                     },
                     "pitch_stability": info.get("pitch_refine", {}),
+                    "regime_refine": info.get("regime_refine", {}),
+                    "regime_flux_sidecar": info.get("regime_flux_sidecar"),
                 },
             }
         )
@@ -106,12 +117,15 @@ def export_metadata(folder: Path, results: List[Dict[str, Any]], cfg: core.Segme
             "File", "Sample Rate", "Mode", "Attack End (s)", "Decay Start (s)", "End (s)",
             "Attack Dur (s)", "Sustain Dur (s)", "Decay Dur (s)", "Release Dur (s)",
             "Pitch Stable Used", "Pitch Std (cents)",
+            "Regime Used", "Regime Mode", "Regime Refused", "Regime Refused Reason",
+            "Regime Flux Sidecar",
         ])
         for info in results:
             if "error" in info:
                 writer.writerow([Path(info["file_path"]).name, "", "", "", "", "", "", "", "", "", "", info["error"]])
                 continue
             pitch = info.get("pitch_refine") or {}
+            regime = info.get("regime_refine") or {}
             writer.writerow([
                 Path(info["file_path"]).name,
                 info["sr"],
@@ -125,6 +139,11 @@ def export_metadata(folder: Path, results: List[Dict[str, Any]], cfg: core.Segme
                 f"{info['dur_rel']:.4f}",
                 pitch.get("used", False),
                 "" if pitch.get("std_cents") is None else f"{pitch['std_cents']:.4f}",
+                regime.get("used", False),
+                regime.get("mode", ""),
+                regime.get("refused", ""),
+                regime.get("refused_reason") or "",
+                info.get("regime_flux_sidecar") or "",
             ])
     logger.info("Metadata: %s, %s", json_path.name, csv_path.name)
 
@@ -154,6 +173,24 @@ def main(argv: List[str] | None = None) -> int:
     )
     parser.add_argument("--export-metadata", action="store_true", help="Write JSON/CSV metadata")
     parser.add_argument("--output", "-o", type=Path, default=None, help="Output directory (default: same as folder)")
+    parser.add_argument(
+        "--regime-mode",
+        choices=["annotate", "trim", "off"],
+        default=None,
+        help="Spectral-regime stage: annotate (default), trim, or off",
+    )
+    parser.add_argument("--regime-flux-ratio", type=float, default=None, help="Trim while edge flux > ratio × reference")
+    parser.add_argument(
+        "--regime-analysis-n-fft",
+        type=int,
+        default=None,
+        help="Downstream STFT size used for the regime duration floor",
+    )
+    parser.add_argument(
+        "--flux-sidecar",
+        action="store_true",
+        help="Write <stem>.flux.json on the sustain frame grid",
+    )
     args = parser.parse_args(argv)
 
     folder = args.folder.resolve()
@@ -171,7 +208,9 @@ def main(argv: List[str] | None = None) -> int:
     out_dir = (args.output or folder).resolve()
 
     logger.info("Processing %d file(s) | preset=%s | fade=%.0fms %s", len(files), args.preset, fade_ms, args.fade_type)
-    results = core.batch_process_folder(folder, cfg, fade_ms, args.fade_type, out_dir)
+    results = core.batch_process_folder(
+        folder, cfg, fade_ms, args.fade_type, out_dir, write_flux_sidecar=args.flux_sidecar
+    )
 
     ok = sum(1 for r in results if "error" not in r)
     logger.info("Done: %d/%d succeeded", ok, len(results))

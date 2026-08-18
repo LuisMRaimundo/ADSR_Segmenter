@@ -8,7 +8,7 @@ Generate locally:
 python run_benchmark.py --generate-corpus
 ```
 
-This writes 40 labeled one-shots and `annotations.json` here. Then run:
+This writes 40 labeled one-shots plus 4 regime items and `annotations.json` here. Then run:
 
 ```bash
 python run_benchmark.py

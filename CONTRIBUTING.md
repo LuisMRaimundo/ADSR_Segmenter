@@ -14,6 +14,7 @@ pytest
 - Run **`pytest`** from the repository root.
 - Do **not** commit `installers/runtime/`, `__pycache__`, `.pytest_cache`, or generated `benchmark/corpus/*.wav`.
 - Regenerate benchmark corpus locally if needed: `python run_benchmark.py --generate-corpus`.
+- New detection stages must default to metadata-only (`annotate`) so published benchmark lines stay comparable.
 
 ## CI
 

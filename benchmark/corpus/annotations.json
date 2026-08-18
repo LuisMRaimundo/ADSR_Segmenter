@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Synthetic ADSR benchmark corpus (40 one-shots, reproducible)",
+  "description": "Synthetic ADSR benchmark corpus (40 one-shots + 4 regime items, reproducible)",
   "sr_default": 22050,
   "samples": [
     {
@@ -442,6 +442,58 @@
       "preset": "Very Long (> 6.0s)",
       "category": "bow",
       "notes": "freq=466.0Hz att=0.27s sus=4.55s dec=0.69s"
+    },
+    {
+      "id": "syn_regime_001",
+      "file": "syn_regime_001.wav",
+      "sr": 22050,
+      "t_att": 0.2,
+      "t_dec": 1.8,
+      "t_end": 2.136236,
+      "preset": "soft_high_brass",
+      "category": "regime",
+      "notes": "style=brass freq=523.25Hz unstable_onset=0.4s burst_at=0.95s",
+      "stable_sustain_start": 0.52,
+      "stable_sustain_end": 1.8
+    },
+    {
+      "id": "syn_regime_002",
+      "file": "syn_regime_002.wav",
+      "sr": 22050,
+      "t_att": 0.24,
+      "t_dec": 2.04,
+      "t_end": 2.391655,
+      "preset": "soft_high_brass",
+      "category": "regime",
+      "notes": "style=brass freq=587.33Hz unstable_onset=0.38s burst_at=1.1s",
+      "stable_sustain_start": 0.52,
+      "stable_sustain_end": 2.04
+    },
+    {
+      "id": "syn_regime_003",
+      "file": "syn_regime_003.wav",
+      "sr": 22050,
+      "t_att": 0.19,
+      "t_dec": 1.69,
+      "t_end": 1.996916,
+      "preset": "soft_high_brass",
+      "category": "regime",
+      "notes": "style=flute freq=659.25Hz unstable_onset=0.36s burst_at=0.9s",
+      "stable_sustain_start": 0.48,
+      "stable_sustain_end": 1.69
+    },
+    {
+      "id": "syn_regime_004",
+      "file": "syn_regime_004.wav",
+      "sr": 22050,
+      "t_att": 0.22,
+      "t_dec": 1.92,
+      "t_end": 2.252336,
+      "preset": "soft_high_brass",
+      "category": "regime",
+      "notes": "style=flute freq=783.99Hz unstable_onset=0.42s burst_at=1.05s",
+      "stable_sustain_start": 0.55,
+      "stable_sustain_end": 1.92
     }
   ]
 }

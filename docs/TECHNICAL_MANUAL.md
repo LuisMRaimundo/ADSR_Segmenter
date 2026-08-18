@@ -1,6 +1,6 @@
 # ADSR_Segmenter — Comprehensive Technical Manual
 
-**Version:** 3.1.0 (`adsr-segmenter`)  
+**Version:** 3.2.0 (`adsr-segmenter`)  
 **Repository:** [github.com/LuisMRaimundo/ADSR_Segmenter](https://github.com/LuisMRaimundo/ADSR_Segmenter)  
 **Audience:** Musicologists, acousticians, sound designers, and software engineers  
 **Copyright:** © 2026 Luís Raimundo. Proprietary research software — see `# Copyright and Use Notice.md`.
@@ -16,17 +16,18 @@
 5. [Signal Processing Pipeline](#5-signal-processing-pipeline)
 6. [Detection Algorithms](#6-detection-algorithms)
 7. [Pitch-Based Sustain Refinement](#7-pitch-based-sustain-refinement)
-8. [Boundary Editing and Click-Free Export](#8-boundary-editing-and-click-free-export)
-9. [Output Layout and Metadata](#9-output-layout-and-metadata)
-10. [Default Parametrization Reference](#10-default-parametrization-reference)
-11. [Mathematical Formalism (LaTeX)](#11-mathematical-formalism-latex)
-12. [API Reference](#12-api-reference)
-13. [GUI and CLI Applications](#13-gui-and-cli-applications)
-14. [Tutorials](#14-tutorials)
-15. [Boundary Benchmark](#15-boundary-benchmark)
-16. [Testing](#16-testing)
-17. [Troubleshooting](#17-troubleshooting)
-18. [Dependencies](#18-dependencies)
+8. [Spectral-regime refinement](#8-spectral-regime-refinement)
+9. [Boundary Editing and Click-Free Export](#9-boundary-editing-and-click-free-export)
+10. [Output Layout and Metadata](#10-output-layout-and-metadata)
+11. [Default Parametrization Reference](#11-default-parametrization-reference)
+12. [Mathematical Formalism (LaTeX)](#12-mathematical-formalism-latex)
+13. [API Reference](#13-api-reference)
+14. [GUI and CLI Applications](#14-gui-and-cli-applications)
+15. [Tutorials](#15-tutorials)
+16. [Boundary Benchmark](#16-boundary-benchmark)
+17. [Testing](#17-testing)
+18. [Troubleshooting](#18-troubleshooting)
+19. [Dependencies](#19-dependencies)
 
 ---
 
@@ -94,7 +95,7 @@ Automatically splits monophonic or quasi-monophonic audio into classical envelop
 ┌─────────────────────────────────────────────────────────────────┐
 │  audio_segment_core.py  (pure DSP — no GUI, unit-testable)      │
 │  trim → detect (smart/advanced/proportional) → pitch refine     │
-│  → zero-crossing snap → fades → segment dict                    │
+│  → regime refine (annotate/trim) → zero-crossing snap → fades   │
 └────────────────────────────┬────────────────────────────────────┘
                              │
          ┌───────────────────┼───────────────────┐
@@ -149,8 +150,9 @@ Preset percentages (`attack_pct`, `sustain_pct`, `decay_pct`) define **target pr
 3. **Trim** — `librosa.effects.trim` at `trim_db` below peak
 4. **Detect** — proportional / smart / advanced mode
 5. **Pitch refine** — optional YIN-based sustain adjustment
-6. **Clamp** — enforce minimum sustain and decay tails
-7. **Extract** — zero-crossing snap, cosine/Hann/linear fades
+6. **Regime refine** — optional spectral-flux stationarity (default: annotate only)
+7. **Clamp** — enforce minimum sustain and decay tails
+8. **Extract** — zero-crossing snap, cosine/Hann/linear fades
 
 ### 5.2 Short-time analysis defaults
 
@@ -221,11 +223,60 @@ Thresholds are **relative to trimmed peak**, not absolute dBFS.
 4. Sliding-window seed search; optional expansion at \(1.25 \times\) stability tolerance
 5. Filename note hint (`Violin_A4.wav` → 440 Hz) biases window scoring
 
-See [§11.7](#117-pitch-based-sustain-refinement).
+See [§12.7](#127-pitch-based-sustain-refinement).
 
 ---
 
-## 8. Boundary Editing and Click-Free Export
+## 8. Spectral-regime refinement
+
+Level and pitch can be steady while the **oscillation regime** is not. A soft high brass note (Iowa tenor trombone, *pp*, C5, 1.54 s: `IOWA_Trb_T_pp_C5_Sustains.aiff`) has pitch σ of 2–5 cents everywhere and level flat within ±1 dB, yet median spectral flux is 0.39 in 0–0.3 s and 0.18 at 0.9–1.2 s against 0.14 in the stable middle, and the 1.5·f₀ band is 20 dB below H1 at the edges but 50 dB below in the middle. The energy plateau and `refine_sustain_by_pitch` are blind to that third non-stationarity. Spectral flux was already computed (`compute_spectral_flux`) but only used to sharpen attack in Advanced mode.
+
+### 8.1 Algorithm
+
+1. Compute flux on the same frame grid as the pitch stage (`frame_length`, `hop_length`).
+2. Restrict to the pitch-stable sustain `[t_att, t_dec]`. Reference = median flux over the central `regime_reference_fraction` (default 0.5).
+3. Smooth with a moving median of `regime_flux_median_frames` (default 9, odd).
+4. Walk inward from each end while smoothed flux > `regime_flux_ratio` × reference (default 2.0). The first passing frame is the candidate boundary.
+5. **Floor:** if the candidate span is shorter than `effective_regime_floor`, do not trim (`refused=True`). If the floor itself exceeds the available span, keep the inputs and set `refused_reason='span_below_floor'`.
+6. Mode **annotate** (default): returned times equal the inputs; `window_start` / `window_end` report the candidate. Mode **trim**: returned times are the candidate boundaries. `t_end` and decay/release logic are untouched.
+
+\[
+t_{\mathrm{floor}} = \max\!\left(
+  t_{\mathrm{min}},\;
+  K_{\mathrm{win}}\frac{N_{\mathrm{STFT}}}{f_s}
+\right)
+\]
+
+with \(N_{\mathrm{STFT}} =\) `regime_analysis_n_fft` or `frame_length`. See [docs/REGIME_REFINE_NOTES.md](REGIME_REFINE_NOTES.md) for why each default was chosen.
+
+### 8.2 Metadata keys (`regime_refine`)
+
+Always present, `None` when not applicable: `used`, `mode`, `flux_reference`, `flux_edge_ratio_start`, `flux_edge_ratio_end`, `window_start`, `window_end`, `window_duration`, `trimmed_start_s`, `trimmed_end_s`, `refused`, `refused_reason`, `floor_seconds`, `floor_windows`, `analysis_n_fft`, `half_integer_ratio_db_edges`, `half_integer_ratio_db_middle`.
+
+### 8.3 Flux sidecar (`--flux-sidecar` / GUI checkbox)
+
+`<stem>.flux.json` on the sustain frame grid:
+
+```json
+{"sr": 44100, "hop_length": 512, "n_fft": 1024,
+ "times": [0.0, ...], "flux": [...], "half_integer_ratio_db": [...]}
+```
+
+A downstream analyser can weight or median frames without recomputing STFT.
+
+### 8.4 Annotate versus trim
+
+| Mode | `_Sustains/` | `_Sustains_Stable/` | Use |
+|------|----------------|----------------------|-----|
+| **annotate** (default) | Energy + pitch (unchanged) | not written | STFT / spectral work; keep every available period |
+| **trim** | Energy + pitch (unchanged) | flux-stable window | Sampler cores that must drop a half-integer onset |
+| **off** | Energy + pitch | not written | `regime_refine == {}` |
+
+Prefer **annotate** unless the exported sustain itself must exclude the unstable regime. Prefer **trim** for soft high brass (`soft_high_brass` preset).
+
+---
+
+## 9. Boundary Editing and Click-Free Export
 
 ### 8.1 Zero-crossing alignment
 
@@ -247,7 +298,7 @@ Drag green (attack) and orange (decay) lines; arrow keys nudge 5 ms (Shift = 25 
 
 ---
 
-## 9. Output Layout and Metadata
+## 10. Output Layout and Metadata
 
 For input `Violin_A4.wav`:
 
@@ -255,6 +306,7 @@ For input `Violin_A4.wav`:
 source_folder/
 ├── _Attacks/Violin_A4_Attack.wav
 ├── _Sustains/Violin_A4_Sustain.wav
+├── _Sustains_Stable/Violin_A4_SustainStable.wav   # trim mode only
 ├── _Decays/Violin_A4_Decay.wav
 ├── _Release_Silence/Violin_A4_Release.wav
 ├── _Full_Active_Sound/Violin_A4_FullActive.wav
@@ -262,11 +314,11 @@ source_folder/
 └── segmentation_metadata.csv
 ```
 
-JSON per-file keys include `segments.attack_end`, `decay_start`, `end`, `durations.*`, `pitch_stability`.
+JSON per-file keys include `segments.attack_end`, `decay_start`, `end`, `durations.*`, `pitch_stability`, `regime_refine`, and optional `regime_flux_sidecar`.
 
 ---
 
-## 10. Default Parametrization Reference
+## 11. Default Parametrization Reference
 
 ### 10.1 Global module constants (`audio_segment_core.py`)
 
@@ -312,6 +364,15 @@ These are the **authoritative detection defaults** used by the core library, CLI
 | `pitch_refine_mode` | `"expand"` | enum | `expand` / `annotate` / `crop` |
 | `pitch_refine_min_fraction` | 0.70 | ratio | Revert threshold |
 | `sustain_fraction_before_decay` | 0.75 | ratio | Earliest decay guard |
+| `use_regime_refine` | `True` | bool | Enable spectral-regime stage |
+| `regime_refine_mode` | `"annotate"` | enum | `annotate` / `trim` |
+| `regime_flux_ratio` | 2.0 | ratio | Walk inward while flux > ratio × reference |
+| `regime_flux_median_frames` | 9 | frames | Odd moving-median on flux |
+| `regime_reference_fraction` | 0.5 | fraction | Central span used as flux reference |
+| `regime_min_windows` | 20 | windows | Floor in downstream STFT hops |
+| `regime_min_duration` | 1.0 | s | Floor in seconds |
+| `regime_analysis_n_fft` | `None` | samples | Downstream STFT size (`frame_length` if None) |
+| `regime_half_integer` | `True` | bool | Report 1.5·f₀ / 2.5·f₀ vs f₀ (dB) |
 
 **Effective minimum sustain:**
 
@@ -354,6 +415,9 @@ Percentages are normalized to sum to 1 internally if needed.
 | Long (3.0–6.0s) | 0.10 | 0.70 | 0.20 | 60 | 0.60 | 0.90 | 0.45 | expand, min_frac 0.72 |
 | Very Long (> 6.0s) | 0.08 | 0.75 | 0.17 | 70 | 1.00 | 0.90 | 0.40 | expand, min_frac 0.75 |
 | Custom | 0.15 | 0.60 | 0.25 | 50 | 0.35 | 0.90 | 0.50 | — |
+| soft_high_brass | 0.08 | 0.75 | 0.17 | 70 | 1.00 | 0.90 | 0.40 | trim, flux ratio 2.0, pitch σ = 8¢ |
+
+Every preset also carries the regime-annotate keys (`use_regime_refine=True`, `regime_refine_mode="annotate"`, …) except `soft_high_brass`, which sets `trim`.
 
 ### 10.5 Articulation presets (`ARTICULATION_PRESETS`)
 
@@ -379,7 +443,7 @@ Scans up to 100 files, trims each at 60 dB, averages active duration, selects ma
 
 ---
 
-## 11. Mathematical Formalism (LaTeX)
+## 12. Mathematical Formalism (LaTeX)
 
 This section gives the complete mathematical apparatus implemented in `audio_segment_core.py`.
 
@@ -826,7 +890,7 @@ Sample indices after zero-crossing snap:
 
 ---
 
-## 12. API Reference
+## 13. API Reference
 
 ### 12.1 Primary entry points
 
@@ -858,7 +922,9 @@ parts, idx_att, idx_dec, idx_end = core.extract_and_fade_segments(
 |----------|---------|
 | `trim_active_region(y, sr, trim_db)` | Silence gate |
 | `compute_rms_envelope(y, sr, …)` | Energy envelope |
-| `compute_spectral_flux(y, sr, …)` | Onset-sensitive flux |
+| `compute_spectral_flux(y, sr, …)` | Onset-sensitive flux (`n_fft` optional) |
+| `compute_half_integer_ratio_db(y, sr, f0, cfg)` | 1.5·f₀+2.5·f₀ vs f₀ (dB) |
+| `refine_sustain_by_regime(…)` | Spectral-stationarity sustain window |
 | `detect_segments(y, sr, cfg, file_path)` | Full detection pipeline |
 | `validate_segments(t_att, t_dec, t_end)` | Ordering / min duration check |
 | `extract_and_fade_segments(…)` | Slice + ZC + fade |
@@ -875,7 +941,7 @@ parts, idx_att, idx_dec, idx_end = core.extract_and_fade_segments(
 
 ---
 
-## 13. GUI and CLI Applications
+## 14. GUI and CLI Applications
 
 ### 13.1 Launch
 
@@ -905,6 +971,10 @@ Entry points: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-segmenter-benchm
 | `--no-pitch-refine` | Disable pitch refinement |
 | `--pitch-refine-mode` | `expand` / `annotate` / `crop` |
 | `--no-vibrato-robust` | Disable vibrato suppression |
+| `--regime-mode` | `annotate` / `trim` / `off` |
+| `--regime-flux-ratio` | Flux edge / reference threshold |
+| `--regime-analysis-n-fft` | Downstream STFT size for the floor |
+| `--flux-sidecar` | Write `<stem>.flux.json` |
 | `--export-metadata` | Write JSON + CSV |
 | `--output` | Output directory (default: source folder) |
 
@@ -914,14 +984,14 @@ Entry points: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-segmenter-benchm
 
 1. **Source Folder** — select input directory
 2. **Preset Configuration** — duration class; **Auto-Detect Mean Length** or manual mean length; **Apply Preset**
-3. **Segmentation Parameters** — thresholds, fades, Smart/Advanced, pitch refine mode, optional thread pool
+3. **Segmentation Parameters** — thresholds, fades, Smart/Advanced, pitch refine, regime refine (mode / flux ratio / n_fft / sidecar), optional thread pool
 4. **► RUN OPTIMIZED SPLIT** — batch process
 5. **Review Segmentation** — manual boundary adjustment
 6. **Clear** — reset UI state (does not delete outputs)
 
 ---
 
-## 14. Tutorials
+## 15. Tutorials
 
 ### Tutorial A — First batch split (GUI)
 
@@ -1019,6 +1089,18 @@ python split_audio_cli.py \
 
 Read `pitch_stability.window_start` / `window_end` from JSON for analysis ROI.
 
+Soft high brass (half-integer onset after a flat level):
+
+```bash
+python split_audio_cli.py -f ./trombone_pp \
+  --preset soft_high_brass \
+  --regime-mode trim \
+  --flux-sidecar \
+  --export-metadata
+```
+
+`_Sustains/` is unchanged. `_Sustains_Stable/` is the flux-stable window. `<stem>.flux.json` and `segments.regime_refine` record the cut and the floor decision.
+
 ---
 
 ### Tutorial E — Python scripting (single file)
@@ -1080,16 +1162,16 @@ cd "path/to/ADSR_Segmenter"
 pytest
 ```
 
-27 tests across trim, smart ordering, vibrato robustness, annotate mode, benchmark smoke tests.
+Unit tests across trim, smart ordering, vibrato robustness, annotate mode, regime refine, and benchmark smoke tests.
 
 ---
 
-## 15. Boundary Benchmark
+## 16. Boundary Benchmark
 
 Reproducible evaluation against labeled ground truth:
 
 ```bash
-python run_benchmark.py --generate-corpus   # 40 synthetic one-shots
+python run_benchmark.py --generate-corpus   # 40 synthetic one-shots + 4 regime items
 python run_benchmark.py                     # → benchmark/results/benchmark_report.txt
 python run_benchmark.py --template my_labels.csv
 python run_benchmark.py --annotations my_labels.csv --audio-dir D:/labeled
@@ -1099,19 +1181,20 @@ Metrics: MAE for \(t_{\mathrm{att}}\), \(t_{\mathrm{dec}}\), \(t_{\mathrm{end}}\
 
 ---
 
-## 16. Testing
+## 17. Testing
 
 | Module | Coverage |
 |--------|----------|
 | `test_segment_detection.py` | Trim, attack energy, smart ordering, short sounds, ZC extract |
 | `test_advanced_features.py` | Vibrato robust, Hann vs cosine, long-note guard, annotate, batch I/O |
 | `test_benchmark.py` | Corpus generation, MAE aggregation, template |
+| `test_regime_refine.py` | Steady tone, half-integer onset, floor refusal, annotate, sidecar |
 
 Key regression: 6 s note sustain ≥ 2.8 s; annotate mode preserves energy boundaries.
 
 ---
 
-## 17. Troubleshooting
+## 18. Troubleshooting
 
 | Issue | Cause | Remedy |
 |-------|-------|--------|
@@ -1119,12 +1202,14 @@ Key regression: 6 s note sustain ≥ 2.8 s; annotate mode preserves energy bound
 | No files found | Wrong folder | Files must be directly in folder |
 | Clicks at edges | Cut away from ZC | Increase fade; cosine; manual nudge |
 | Sustain too short | Pitch crop / tight refine | annotate or expand; Very Long preset |
+| Soft brass still has “fizz” after attack | Unstable half-integer regime | Regime **trim** or `soft_high_brass`; or keep annotate + sidecar |
+| `regime_refine.refused` is true | Candidate shorter than STFT floor | Lower `regime_analysis_n_fft`, or keep annotate and use the sidecar |
 | All segments similar length | Proportional-only | Enable Smart Mode |
 | MP3 slow/fails | Codec | Convert to WAV for batch jobs |
 
 ---
 
-## 18. Dependencies
+## 19. Dependencies
 
 | Package | Version | Role |
 |---------|---------|------|
@@ -1154,4 +1239,4 @@ DEFAULT_SUSTAIN_FRACTION_BEFORE_DECAY = 0.75
 
 ---
 
-*Document for ADSR_Segmenter v3.1.0. Synchronized with `audio_segment_core.py`, `ALL_PRESETS`, and `SegmentConfig`. Last updated: June 2026.*
+*Document for ADSR_Segmenter v3.2.0. Synchronized with `audio_segment_core.py`, `ALL_PRESETS`, and `SegmentConfig`. Last updated: August 2026.*
