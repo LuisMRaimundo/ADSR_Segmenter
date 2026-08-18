@@ -269,6 +269,43 @@ def test_low_register_hi_uses_pitch_frame(sr):
     assert info["half_integer_invalid_reason"] is None
 
 
+def test_hi_n_fft_from_resolution():
+    cfg = core.SegmentConfig()
+    sr44 = 44100
+    expected = {523.25: 2048, 164.81: 4096, 82.41: 8192}
+    for f0, n_exp in expected.items():
+        y = _harmonics(sr44, f0, 1.6)
+        _r, _t, st = core.compute_half_integer_ratio_db(y, sr44, f0, cfg)
+        assert st["half_integer_valid"] is True
+        assert st["hi_n_fft"] == n_exp
+        assert st["hi_n_fft_source"] == "resolution"
+
+    sr = 22050
+    for f0 in (82.0, 165.0, 262.0, 523.0, 1046.0):
+        y = _harmonics(sr, f0, 1.5)
+        _r, _t, st = core.compute_half_integer_ratio_db(y, sr, f0, cfg)
+        assert st["half_integer_valid"] is True, f0
+        need = 2.0 * sr / (0.15 * f0)
+        assert st["hi_n_fft"] == core.next_pow2(need)
+        assert st["hi_n_fft_source"] == "resolution"
+
+    # Cap at 16384 is below the resolution need → band_below_resolution.
+    y30 = _harmonics(sr44, 30.0, 2.0)
+    _r, _t, st_cap = core.compute_half_integer_ratio_db(y30, sr44, 30.0, cfg)
+    assert st_cap["hi_n_fft"] == 16384
+    assert st_cap["hi_n_fft_source"] == "cap"
+    assert st_cap["half_integer_valid"] is False
+    assert st_cap["reason"] == "band_below_resolution"
+
+    # Short clip clamps n_fft below the E2 need.
+    y_short = _harmonics(sr44, 82.41, 0.25)
+    _r, _t, st_sus = core.compute_half_integer_ratio_db(y_short, sr44, 82.41, cfg)
+    assert st_sus["hi_n_fft_source"] == "sustain"
+    assert st_sus["hi_n_fft"] < 8192
+    assert st_sus["half_integer_valid"] is False
+    assert st_sus["reason"] == "band_below_resolution"
+
+
 def test_normalised_threshold_hook(sr):
     y = _adsr_tone(sr, 440.0, att=0.08, sus=2.0, dec=0.2)
     y_trim, _ = core.trim_active_region(y, sr)

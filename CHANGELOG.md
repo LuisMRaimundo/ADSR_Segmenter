@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.3.2 — 2026-08-18
+
+Half-integer `n_fft` is chosen from band resolution, not from the pitch frame.
+
+- Smallest power of two with `2·sr/n_fft ≤ α·f₀`, then clamped to `[pitch_frame_length, 16384]` and `≤ sustain_samples/4`.
+- Reports `hi_n_fft` and `hi_n_fft_source` (`resolution` / `pitch_frame` / `cap` / `sustain` / `config`).
+- Typical 44.1 kHz: C5 → 2048, E3 → 4096, E2 → 8192, all valid. `band_below_resolution` only when a clamp prevents that size.
+
 ## 3.3.1 — 2026-08-18
 
 Three regime-stage fixes; other defaults unchanged.

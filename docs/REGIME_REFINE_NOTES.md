@@ -38,8 +38,13 @@ unchanged from v3.1 / v3.2.
 | Parameter | Default | Why |
 |-----------|---------|-----|
 | `regime_flux_ratio_normalised` | `1.5` | Walk threshold when regime flux is frame-energy-normalised. Set on the Iowa trombone *pp* batch: clean notes had edge / reference ≤ 1.35, C5 reached 1.83. **Must be validated on one string batch and one woodwind batch** before treating 1.5 as instrument-general. Reported as `flux_ratio_applied`. |
-| HI `n_fft` | pitch frame, else `max(frame_length, 4096)` | The half-integer track is no longer computed on the flux-grid 1024-point STFT. At 82 Hz, `α·f₀` is resolvable at 4096 (`half_integer_valid=True`). Sidecar key `hi_n_fft`. |
 | `half_integer_invalid_reason` | — | Always filled when `half_integer_valid` is False: `band_below_resolution` / `no_f0` / `refused`. |
+
+## v3.3.2
+
+| Parameter | Default | Why |
+|-----------|---------|-----|
+| HI `n_fft` | smallest pow2 with `2·sr/n_fft ≤ α·f₀` | Not the pitch frame. Then clamp to `[pitch_frame, 16384]` and `≤ len(y)/4`. At 44.1 kHz: C5 → 2048, E3 → 4096, E2 → 8192, all valid. `hi_n_fft_source` is `resolution`, `pitch_frame`, `cap`, `sustain`, or `config`. `band_below_resolution` only when a clamp prevents that size. |
 
 ## Level-independent flux
 
