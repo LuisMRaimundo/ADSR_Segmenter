@@ -93,6 +93,17 @@ def run_benchmark(
                 aggregate_evaluations(evals, mode, preset, pitch_mode, tolerance_ms)
             )
 
+    regime_samples = [s for s in samples if s.stable_sustain_start is not None]
+    if regime_samples:
+        cfg = build_config_for_run("soft_high_brass", "smart", "expand")
+        cfg.use_regime_refine = True
+        cfg.regime_refine_mode = "trim"
+        evals = [evaluate_sample(s, cfg) for s in regime_samples]
+        report.samples.extend(evals)
+        report.aggregates.append(
+            aggregate_evaluations(evals, "smart", "soft_high_brass", "expand", tolerance_ms)
+        )
+
     return report
 
 
@@ -116,7 +127,7 @@ def main(argv: List[str] | None = None) -> int:
         default=None,
         help="Base folder for audio paths in CSV (default: corpus-dir)",
     )
-    parser.add_argument("--generate-corpus", action="store_true", help="Generate 40 synthetic labeled one-shots")
+    parser.add_argument("--generate-corpus", action="store_true", help="Generate 40 synthetic labeled one-shots plus 4 regime items")
     parser.add_argument(
         "--template",
         type=Path,
@@ -167,6 +178,8 @@ def main(argv: List[str] | None = None) -> int:
                 preset=s.preset,
                 category=s.category,
                 notes=s.notes,
+                stable_sustain_start=s.stable_sustain_start,
+                stable_sustain_end=s.stable_sustain_end,
             )
             for s in samples
         ]

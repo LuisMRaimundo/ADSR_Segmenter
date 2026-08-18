@@ -25,7 +25,7 @@ python split_audio_segments.py
 1. **Browse** → select your folder.
 2. Choose a **Preset** matching average note length (or **Auto-Detect Mean Length**).
 3. Leave **Smart Mode** on for most orchestral material.
-4. For **spectral analysis / STFT**, set **Pitch Refine** to **annotate** (keeps long sustains).
+4. For **spectral analysis / STFT**, set **Pitch Refine** to **annotate** (keeps long sustains). Leave **Regime refine** on **annotate** unless you also want a flux-stable crop.
 5. Click **► RUN OPTIMIZED SPLIT**.
 6. Use **Review Segmentation** to drag attack (green) and decay (orange) lines if needed.
 
@@ -34,7 +34,10 @@ python split_audio_segments.py
 Next to your source files:
 
 - `_Attacks/`, `_Sustains/`, `_Decays/`, `_Release_Silence/`, `_Full_Active_Sound/`
-- `segmentation_metadata.json` and `.csv`
+- `_Sustains_Stable/` when **Regime refine** is **trim** (soft high brass, half-integer onset)
+- `segmentation_metadata.json` and `.csv` (plus optional `<stem>.flux.json` sidecar)
+
+Spectral-regime refinement watches the spectrum after level and pitch have already settled. Default **annotate** only records the stable window; **trim** also exports `_Sustains_Stable/`. Use the **soft_high_brass** preset (Very Long profile, flux ratio 2.0, pitch σ = 8 ¢) for *pp* high brass.
 
 ## 5. Presets at a glance
 
@@ -45,10 +48,11 @@ Next to your source files:
 | Long / Very Long | Sustained bowed notes (5–7 s) |
 | Legato / Bow | Long notes with vibrato |
 | Staccato / Pluck | Short attacks, advanced detection |
+| soft_high_brass | Soft high brass; regime **trim** + 8 ¢ pitch window |
 
 ## 6. Need help?
 
-See [docs/TECHNICAL_MANUAL.md](TECHNICAL_MANUAL.md) §14 Troubleshooting.
+See [docs/TECHNICAL_MANUAL.md](docs/TECHNICAL_MANUAL.md) §18 Troubleshooting and [docs/REGIME_REFINE_NOTES.md](docs/REGIME_REFINE_NOTES.md) for regime defaults.
 
 ## Copyright
 

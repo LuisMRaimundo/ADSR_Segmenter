@@ -24,7 +24,8 @@ def test_generate_corpus_count():
     with tempfile.TemporaryDirectory() as tmp:
         ann = generate_corpus(Path(tmp))
         data = json.loads(ann.read_text())
-        assert len(data["samples"]) == len(SYNTHETIC_SPECS) == 40
+        assert len(SYNTHETIC_SPECS) == 40
+        assert len(data["samples"]) == 44
         assert all((Path(tmp) / s["file"]).exists() for s in data["samples"])
 
 

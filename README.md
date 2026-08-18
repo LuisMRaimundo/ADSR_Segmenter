@@ -46,11 +46,12 @@ Entry points after install: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-se
 |---------------|---------|
 | `_Attacks/` | Onset → attack boundary |
 | `_Sustains/` | Attack → decay boundary |
+| `_Sustains_Stable/` | Flux-stable sustain (only when regime refine is `trim`) |
 | `_Decays/` | Decay → end of active sound |
 | `_Release_Silence/` | Tail after active energy |
 | `_Full_Active_Sound/` | Full trimmed active region |
 
-Detection modes: **smart** (energy + proportional anchors, default), **advanced** (spectral flux + derivatives), **proportional**. Pitch refinement: **expand** (default), **annotate** (full sustain for STFT + metadata), **crop** (tight stable window).
+Detection modes: **smart** (energy + proportional anchors, default), **advanced** (spectral flux + derivatives), **proportional**. Pitch refinement: **expand** (default), **annotate** (full sustain for STFT + metadata), **crop** (tight stable window). Spectral-regime refinement: **annotate** (default, metadata only), **trim** (also writes `_Sustains_Stable/`), or **off**. Optional `--flux-sidecar` writes `<stem>.flux.json` on the sustain frame grid.
 
 ---
 
@@ -61,6 +62,8 @@ Detection modes: **smart** (energy + proportional anchors, default), **advanced*
 | [QUICK_GUIDE.md](QUICK_GUIDE.md) | Non-specialist workflow |
 | [run.bat](run.bat) | Windows launcher (Python already installed) |
 | [docs/TECHNICAL_MANUAL.md](docs/TECHNICAL_MANUAL.md) | Full DSP specification, API, tutorials |
+| [docs/REGIME_REFINE_NOTES.md](docs/REGIME_REFINE_NOTES.md) | Spectral-regime defaults and rationale |
+| [CHANGELOG.md](CHANGELOG.md) | Version history |
 | [installers/README.md](installers/README.md) | Autonomous installers (Windows / macOS / Linux) |
 | [# Copyright and Use Notice.md](#%20Copyright%20and%20Use%20Notice.md) | Proprietary terms |
 | [docs/ACKNOWLEDGEMENTS.md](docs/ACKNOWLEDGEMENTS.md) | Funding and thanks |
@@ -70,7 +73,7 @@ Detection modes: **smart** (energy + proportional anchors, default), **advanced*
 
 ## Benchmark
 
-Reproducible synthetic corpus (40 labeled one-shots) and per-mode/per-preset mean boundary error (ms):
+Reproducible synthetic corpus (40 labeled one-shots plus 4 regime items) and per-mode/per-preset mean boundary error (ms):
 
 ```bash
 python run_benchmark.py --generate-corpus

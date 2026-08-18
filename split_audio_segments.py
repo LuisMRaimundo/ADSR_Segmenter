@@ -60,8 +60,8 @@ class ADSRSegmenter:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("ADSR_Segmenter v3.1 — Smart Detection")
-        self.root.geometry("1000x850")
+        self.root.title("ADSR_Segmenter v3.2 — Smart Detection")
+        self.root.geometry("1000x920")
         
         # Configuration
         self.source_folder = tk.StringVar()
@@ -77,6 +77,10 @@ class ADSRSegmenter:
         self.pitch_stability_cents = tk.DoubleVar(value=self.DEFAULT_PITCH_STABILITY_CENTS)
         self.pitch_window_duration = tk.DoubleVar(value=self.DEFAULT_PITCH_WINDOW_DURATION)
         self.pitch_refine_mode = tk.StringVar(value="expand")
+        self.regime_refine_mode = tk.StringVar(value="annotate")
+        self.regime_flux_ratio = tk.DoubleVar(value=2.0)
+        self.regime_analysis_n_fft = tk.IntVar(value=0)  # 0 = use frame_length
+        self.write_flux_sidecar = tk.BooleanVar(value=False)
         
         # Preset configuration
         self.preset_name = tk.StringVar(value="Medium (1.5-3.0s)")
@@ -112,6 +116,7 @@ class ADSRSegmenter:
         # Manual overrides to prevent auto re-detection from overwriting edits
         self.manual_overrides: Dict[str, Tuple[float, float]] = {}
         self._last_pitch_refine_info: Dict[str, Optional[float]] = {}
+        self._last_regime_refine_info: Dict = {}
         self._last_trim: Optional[segcore.TrimInfo] = None
 
         self._build_ui()
@@ -131,6 +136,12 @@ class ADSRSegmenter:
             pitch_refine_mode=str(self.pitch_refine_mode.get()),
             use_advanced=bool(self.use_advanced_mode.get()),
             use_smart=bool(self.use_smart_mode.get()) and not bool(self.use_advanced_mode.get()),
+            use_regime_refine=str(self.regime_refine_mode.get()) != "off",
+            regime_refine_mode="annotate" if str(self.regime_refine_mode.get()) == "off" else str(self.regime_refine_mode.get()),
+            regime_flux_ratio=float(self.regime_flux_ratio.get()),
+            regime_analysis_n_fft=(
+                None if int(self.regime_analysis_n_fft.get()) <= 0 else int(self.regime_analysis_n_fft.get())
+            ),
         )
     
     def _build_ui(self):
@@ -255,6 +266,23 @@ class ADSRSegmenter:
         ttk.Label(params_grid, text="Workers:").grid(row=4, column=5, padx=5, sticky="w")
         ttk.Spinbox(params_grid, from_=1, to=mp.cpu_count(), textvariable=self.max_workers,
                    width=10).grid(row=5, column=0, padx=5)
+
+        ttk.Label(params_grid, text="Regime refine:").grid(row=5, column=1, padx=5, sticky="w")
+        regime_modes = ttk.Frame(params_grid)
+        regime_modes.grid(row=5, column=2, columnspan=2, padx=5, sticky="w")
+        ttk.Radiobutton(regime_modes, text="annotate", variable=self.regime_refine_mode, value="annotate").pack(side=tk.LEFT)
+        ttk.Radiobutton(regime_modes, text="trim", variable=self.regime_refine_mode, value="trim").pack(side=tk.LEFT)
+        ttk.Radiobutton(regime_modes, text="off", variable=self.regime_refine_mode, value="off").pack(side=tk.LEFT)
+
+        ttk.Label(params_grid, text="Regime flux ratio:").grid(row=5, column=4, padx=5, sticky="w")
+        ttk.Spinbox(params_grid, from_=1.1, to=8.0, textvariable=self.regime_flux_ratio,
+                   increment=0.1, width=10, format="%.1f").grid(row=5, column=5, padx=5)
+
+        ttk.Label(params_grid, text="Regime n_fft:").grid(row=6, column=0, padx=5, sticky="w")
+        ttk.Spinbox(params_grid, from_=0, to=65536, textvariable=self.regime_analysis_n_fft,
+                   increment=1024, width=10).grid(row=6, column=1, padx=5)
+        ttk.Checkbutton(params_grid, variable=self.write_flux_sidecar,
+                       text="Write flux sidecar").grid(row=6, column=2, columnspan=2, padx=5, sticky="w")
         
         # Log area
         frame_log = ttk.LabelFrame(self.root, text="Log", padding=10)
@@ -286,6 +314,7 @@ class ADSRSegmenter:
         self._audio_cache.clear()
         self.manual_overrides.clear()
         self._last_pitch_refine_info = {}
+        self._last_regime_refine_info = {}
         self.txt_log.config(state=tk.NORMAL)
         self.txt_log.delete("1.0", tk.END)
         self.txt_log.config(state=tk.DISABLED)
@@ -371,6 +400,13 @@ class ADSRSegmenter:
                 self.pitch_stability_cents.set(float(preset["pitch_stability_cents"]))
             if "pitch_refine_mode" in preset:
                 self.pitch_refine_mode.set(str(preset["pitch_refine_mode"]))
+            if "regime_refine_mode" in preset:
+                self.regime_refine_mode.set(str(preset["regime_refine_mode"]))
+            if "regime_flux_ratio" in preset:
+                self.regime_flux_ratio.set(float(preset["regime_flux_ratio"]))
+            if "regime_analysis_n_fft" in preset:
+                n_fft = preset["regime_analysis_n_fft"]
+                self.regime_analysis_n_fft.set(0 if n_fft is None else int(n_fft))
             self._validate_percentages()
             self._log(f"Applied preset: {preset_name}")
     
@@ -458,6 +494,7 @@ class ADSRSegmenter:
         result = segcore.detect_segments(y, sr, self._config_from_ui(), file_path)
         self._last_trim = result.trim
         self._last_pitch_refine_info = result.pitch_refine
+        self._last_regime_refine_info = result.regime_refine
         return result.t_att, result.t_dec, result.t_end
 
     def _validate_segments(self, t_att: float, t_dec: float, t_end: float,
@@ -532,6 +569,7 @@ class ADSRSegmenter:
                     "expected_note_hz": None,
                     "mean_abs_cents_from_note": None
                 }
+                regime_info: Dict = {}
             else:
                 t_att, t_dec, t_end = self.detect_segments(y, sr, file_path=f_path)
                 pitch_info = dict(self._last_pitch_refine_info) if self._last_pitch_refine_info else {
@@ -541,13 +579,19 @@ class ADSRSegmenter:
                     "window_end": None,
                     "window_duration": None
                 }
+                regime_info = dict(self._last_regime_refine_info) if self._last_regime_refine_info else {}
             
             # Validate
             if not self._validate_segments(t_att, t_dec, t_end):
                 return f"Error: Invalid segment boundaries detected"
+
+            t_att_std = float(regime_info.get("source_att", t_att))
+            t_dec_std = float(regime_info.get("source_dec", t_dec))
+            if not self._validate_segments(t_att_std, t_dec_std, t_end):
+                t_att_std, t_dec_std = t_att, t_dec
             
             # Extract segments and apply fades (shared logic)
-            parts, idx_att, idx_dec, idx_end = self._extract_and_fade_segments(y, sr, t_att, t_dec, t_end)
+            parts, idx_att, idx_dec, idx_end = self._extract_and_fade_segments(y, sr, t_att_std, t_dec_std, t_end)
             
             # Write segments
             for folder, audio in parts.items():
@@ -562,6 +606,26 @@ class ADSRSegmenter:
                         tag = folder.strip('_')
                     output_path = target_dir / f"{f_path.stem}_{tag}{f_path.suffix}"
                     self._write_audio(output_path, audio, sr)
+
+            cfg_now = self._config_from_ui()
+            if cfg_now.use_regime_refine and cfg_now.regime_refine_mode == "trim":
+                stable_dir = out_dir / "_Sustains_Stable"
+                stable_dir.mkdir(exist_ok=True, parents=True)
+                parts_stable, _, _, _ = self._extract_and_fade_segments(y, sr, t_att, t_dec, t_end)
+                stable_audio = parts_stable.get("_Sustains")
+                if stable_audio is not None and len(stable_audio) > 0:
+                    self._write_audio(
+                        stable_dir / f"{f_path.stem}_SustainStable{f_path.suffix}",
+                        stable_audio,
+                        sr,
+                    )
+
+            sidecar_path = None
+            if self.write_flux_sidecar.get():
+                f0_hz = pitch_info.get("median_f0_hz") or pitch_info.get("expected_note_hz")
+                payload = segcore.build_regime_flux_sidecar(y, sr, cfg_now, t_att_std, t_dec_std, f0_hz)
+                sidecar_path = out_dir / f"{f_path.stem}.flux.json"
+                sidecar_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             
             trim = self._last_trim
             idx_start = trim.idx_start if trim else 0
@@ -577,6 +641,8 @@ class ADSRSegmenter:
                 "dur_dec": (idx_end - idx_dec) / sr,
                 "dur_rel": (len(y) - idx_end) / sr,
                 "pitch_refine": pitch_info,
+                "regime_refine": regime_info,
+                "regime_flux_sidecar": str(sidecar_path) if sidecar_path else None,
             }
             with self._state_lock:
                 self.segment_info = [i for i in self.segment_info if i["file_path"] != str(f_path)] + [info]
@@ -808,11 +874,12 @@ class ADSRSegmenter:
         left = ttk.Frame(main)
         left.pack(side=tk.LEFT, fill=tk.BOTH)
         
-        cols = ("File", "Att (s)", "Sus (s)", "Dec (s)", "Rel (s)")
+        cols = ("File", "Att (s)", "Sus (s)", "Dec (s)", "Rel (s)", "Regime refused", "Reason")
         self.review_tree = ttk.Treeview(left, columns=cols, show="headings", height=20)
         for c in cols:
             self.review_tree.heading(c, text=c)
-            self.review_tree.column(c, width=100)
+            width = 140 if c == "Reason" else (110 if c == "Regime refused" else 90)
+            self.review_tree.column(c, width=width)
         
         scrollbar_tree = ttk.Scrollbar(left, orient="vertical", command=self.review_tree.yview)
         self.review_tree.configure(yscrollcommand=scrollbar_tree.set)
@@ -872,12 +939,16 @@ class ADSRSegmenter:
             self.review_tree.delete(child)
         
         for info in self.segment_info:
+            regime = info.get("regime_refine") or {}
+            refused = regime.get("refused")
             self.review_tree.insert("", "end", iid=info["file_path"], values=(
                 Path(info["file_path"]).name,
                 f"{info['dur_att']:.2f}",
                 f"{info['dur_sus']:.2f}",
                 f"{info['dur_dec']:.2f}",
-                f"{info['dur_rel']:.2f}"
+                f"{info['dur_rel']:.2f}",
+                "" if refused is None else str(bool(refused)),
+                regime.get("refused_reason") or "",
             ))
     
     def _on_review_select(self, event):
@@ -1064,6 +1135,10 @@ class ADSRSegmenter:
                     "multiprocessing": self.use_multiprocessing.get() if hasattr(self, 'use_multiprocessing') else False,
                     "pitch_stability_cents": self.pitch_stability_cents.get() if hasattr(self, 'pitch_stability_cents') else self.DEFAULT_PITCH_STABILITY_CENTS,
                     "pitch_window_duration": self.pitch_window_duration.get() if hasattr(self, 'pitch_window_duration') else self.DEFAULT_PITCH_WINDOW_DURATION,
+                    "regime_refine_mode": self.regime_refine_mode.get() if hasattr(self, 'regime_refine_mode') else "annotate",
+                    "regime_flux_ratio": self.regime_flux_ratio.get() if hasattr(self, 'regime_flux_ratio') else 2.0,
+                    "regime_analysis_n_fft": self.regime_analysis_n_fft.get() if hasattr(self, 'regime_analysis_n_fft') else 0,
+                    "flux_sidecar": self.write_flux_sidecar.get() if hasattr(self, 'write_flux_sidecar') else False,
                 },
                 "files": []
             }
@@ -1082,7 +1157,9 @@ class ADSRSegmenter:
                             "decay": info["dur_dec"],
                             "release": info["dur_rel"]
                         },
-                        "pitch_stability": info.get("pitch_refine", {})
+                        "pitch_stability": info.get("pitch_refine", {}),
+                        "regime_refine": info.get("regime_refine", {}),
+                        "regime_flux_sidecar": info.get("regime_flux_sidecar"),
                     }
                 }
                 metadata["files"].append(file_metadata)
@@ -1099,10 +1176,13 @@ class ADSRSegmenter:
                     "File", "Sample Rate", "Attack End (s)", "Decay Start (s)", "End (s)",
                     "Attack Duration (s)", "Sustain Duration (s)", "Decay Duration (s)", "Release Duration (s)",
                     "Pitch Stable Used", "Pitch Std (cents)", "Pitch Window Start (s)", "Pitch Window End (s)", "Pitch Window Duration (s)",
-                    "Expected Note (Hz)", "Mean Abs Cents From Note"
+                    "Expected Note (Hz)", "Mean Abs Cents From Note",
+                    "Regime Used", "Regime Mode", "Regime Refused", "Regime Refused Reason",
+                    "Regime Flux Sidecar",
                 ])
                 for info in self.segment_info:
                     pitch = info.get("pitch_refine", {}) or {}
+                    regime = info.get("regime_refine", {}) or {}
                     writer.writerow([
                         Path(info["file_path"]).name,
                         info["sr"],
@@ -1120,6 +1200,11 @@ class ADSRSegmenter:
                         "" if pitch.get("window_duration") is None else f"{pitch['window_duration']:.4f}",
                         "" if pitch.get("expected_note_hz") is None else f"{pitch['expected_note_hz']:.2f}",
                         "" if pitch.get("mean_abs_cents_from_note") is None else f"{pitch['mean_abs_cents_from_note']:.4f}",
+                        regime.get("used", False),
+                        regime.get("mode", ""),
+                        "" if regime.get("refused") is None else str(bool(regime.get("refused"))),
+                        regime.get("refused_reason") or "",
+                        info.get("regime_flux_sidecar") or "",
                     ])
             
             self._log(f"Metadata exported to {json_path.name} and {csv_path.name}")

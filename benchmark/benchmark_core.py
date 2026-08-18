@@ -33,12 +33,16 @@ class GroundTruthSample:
     preset: str = "Medium (1.5-3.0s)"
     category: str = "unknown"
     notes: str = ""
+    stable_sustain_start: Optional[float] = None
+    stable_sustain_end: Optional[float] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any], base_dir: Optional[Path] = None) -> "GroundTruthSample":
         path = data["file"]
         if base_dir and not Path(path).is_absolute():
             path = str(base_dir / path)
+        stable_start = data.get("stable_sustain_start")
+        stable_end = data.get("stable_sustain_end")
         return cls(
             sample_id=str(data.get("id") or data.get("sample_id") or Path(path).stem),
             file=path,
@@ -49,6 +53,8 @@ class GroundTruthSample:
             preset=str(data.get("preset") or "Medium (1.5-3.0s)"),
             category=str(data.get("category") or "unknown"),
             notes=str(data.get("notes") or ""),
+            stable_sustain_start=None if stable_start in (None, "") else float(stable_start),
+            stable_sustain_end=None if stable_end in (None, "") else float(stable_end),
         )
 
 
@@ -80,6 +86,8 @@ class SampleEvaluation:
     errors_ms: BoundaryErrorsMs
     predicted: Dict[str, float]
     ground_truth: Dict[str, float]
+    stable_errors_ms: Optional[Dict[str, float]] = None
+    regime_refine_mode: str = "annotate"
 
 
 @dataclass
@@ -94,6 +102,9 @@ class AggregateMetrics:
     mae_mean_ms: float
     within_tolerance_pct: float
     tolerance_ms: float = DEFAULT_TOLERANCE_MS
+    mae_stable_start_ms: Optional[float] = None
+    mae_stable_end_ms: Optional[float] = None
+    regime_refine_mode: str = "annotate"
 
 
 @dataclass
@@ -157,6 +168,8 @@ def load_annotations_csv(path: Path) -> List[GroundTruthSample]:
                         "preset": row.get("preset") or "Medium (1.5-3.0s)",
                         "category": row.get("category") or "manual",
                         "notes": row.get("notes") or "",
+                        "stable_sustain_start": row.get("stable_sustain_start"),
+                        "stable_sustain_end": row.get("stable_sustain_end"),
                     },
                     base,
                 )
@@ -215,9 +228,24 @@ def evaluate_sample(
             preset=sample.preset,
             category=sample.category,
             notes=sample.notes,
+            stable_sustain_start=sample.stable_sustain_start,
+            stable_sustain_end=sample.stable_sustain_end,
         )
     result = core.detect_segments(y, sr, cfg, file_path=Path(sample.file))
     errors = boundary_errors_ms(result, sample)
+    stable_errors = None
+    if (
+        cfg.use_regime_refine
+        and cfg.regime_refine_mode == "trim"
+        and sample.stable_sustain_start is not None
+        and sample.stable_sustain_end is not None
+    ):
+        pred_start = float((result.regime_refine or {}).get("window_start", result.t_att))
+        pred_end = float((result.regime_refine or {}).get("window_end", result.t_dec))
+        stable_errors = {
+            "start": abs(pred_start - sample.stable_sustain_start) * 1000.0,
+            "end": abs(pred_end - sample.stable_sustain_end) * 1000.0,
+        }
     return SampleEvaluation(
         sample_id=sample.sample_id,
         file=sample.file,
@@ -227,6 +255,8 @@ def evaluate_sample(
         errors_ms=errors,
         predicted={"t_att": result.t_att, "t_dec": result.t_dec, "t_end": result.t_end},
         ground_truth={"t_att": sample.t_att, "t_dec": sample.t_dec, "t_end": sample.t_end},
+        stable_errors_ms=stable_errors,
+        regime_refine_mode=cfg.regime_refine_mode if cfg.use_regime_refine else "off",
     )
 
 
@@ -256,6 +286,14 @@ def aggregate_evaluations(
     mae_end = sum(e.errors_ms.t_end for e in evaluations) / n
     mae_mean = sum(e.errors_ms.mean for e in evaluations) / n
     within = sum(1 for e in evaluations if e.errors_ms.within_tolerance(tolerance_ms))
+    stable = [e for e in evaluations if e.stable_errors_ms]
+    mae_stable_start = (
+        sum(e.stable_errors_ms["start"] for e in stable) / len(stable) if stable else None
+    )
+    mae_stable_end = (
+        sum(e.stable_errors_ms["end"] for e in stable) / len(stable) if stable else None
+    )
+    regime_mode = evaluations[0].regime_refine_mode if evaluations else "annotate"
     return AggregateMetrics(
         mode=mode,
         preset=preset,
@@ -267,6 +305,9 @@ def aggregate_evaluations(
         mae_mean_ms=mae_mean,
         within_tolerance_pct=100.0 * within / n,
         tolerance_ms=tolerance_ms,
+        mae_stable_start_ms=mae_stable_start,
+        mae_stable_end_ms=mae_stable_end,
+        regime_refine_mode=regime_mode,
     )
 
 
@@ -287,6 +328,21 @@ def format_report_table(report: BenchmarkReport) -> str:
             f"{a.mae_mean_ms:>8.1f}ms {a.within_tolerance_pct:>5.1f}%"
         )
     lines.append("")
+    stable_aggs = [a for a in report.aggregates if a.mae_stable_start_ms is not None]
+    if stable_aggs:
+        lines.extend(
+            [
+                "Stable-sustain boundary error (regime_refine_mode=trim)",
+                f"{'Mode':<14} {'Preset':<28} {'N':>3} {'MAE start':>10} {'MAE end':>10}",
+                "-" * 70,
+            ]
+        )
+        for a in stable_aggs:
+            lines.append(
+                f"{a.mode:<14} {a.preset:<28} {a.n_samples:>3} "
+                f"{a.mae_stable_start_ms:>9.1f}ms {a.mae_stable_end_ms:>9.1f}ms"
+            )
+        lines.append("")
     return "\n".join(lines)
 
 
