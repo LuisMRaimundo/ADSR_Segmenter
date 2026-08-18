@@ -60,7 +60,7 @@ class ADSRSegmenter:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("ADSR_Segmenter v3.2 — Smart Detection")
+        self.root.title("ADSR_Segmenter v3.3 — Smart Detection")
         self.root.geometry("1000x920")
         
         # Configuration
@@ -79,7 +79,7 @@ class ADSRSegmenter:
         self.pitch_refine_mode = tk.StringVar(value="expand")
         self.regime_refine_mode = tk.StringVar(value="annotate")
         self.regime_flux_ratio = tk.DoubleVar(value=2.0)
-        self.regime_analysis_n_fft = tk.IntVar(value=0)  # 0 = use frame_length
+        self.regime_analysis_n_fft = tk.IntVar(value=0)  # 0 = pitch-stage frame
         self.write_flux_sidecar = tk.BooleanVar(value=False)
         
         # Preset configuration
@@ -622,8 +622,13 @@ class ADSRSegmenter:
 
             sidecar_path = None
             if self.write_flux_sidecar.get():
-                f0_hz = pitch_info.get("median_f0_hz") or pitch_info.get("expected_note_hz")
-                payload = segcore.build_regime_flux_sidecar(y, sr, cfg_now, t_att_std, t_dec_std, f0_hz)
+                f0_hz = None if pitch_info.get("failed") else (
+                    pitch_info.get("median_f0_hz") or pitch_info.get("expected_note_hz")
+                )
+                payload = segcore.build_regime_flux_sidecar(
+                    y, sr, cfg_now, t_att_std, t_dec_std, f0_hz,
+                    pitch_frame_length=pitch_info.get("pitch_frame_length"),
+                )
                 sidecar_path = out_dir / f"{f_path.stem}.flux.json"
                 sidecar_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             

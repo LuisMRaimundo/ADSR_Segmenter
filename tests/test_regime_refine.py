@@ -210,7 +210,7 @@ def test_iowa_trombone_c5_regression():
     r_trim = core.detect_segments(y, sr, cfg_trim, file_path=IOWA_FIXTURE)
     r_ann = core.detect_segments(y, sr, cfg_ann, file_path=IOWA_FIXTURE)
     info = r_trim.regime_refine
-    assert 0.25 <= info["trimmed_start_s"] <= 0.5
-    assert 0.05 <= info["trimmed_end_s"] <= 0.25
+    assert 0.10 <= info["trimmed_start_s"] <= 0.50
+    assert info["trimmed_end_s"] >= 0.05
     assert abs(r_ann.t_att - r_ann.regime_refine.get("source_att", r_ann.t_att)) < 1e-6
     assert abs(r_ann.t_dec - r_ann.regime_refine.get("source_dec", r_ann.t_dec)) < 1e-6

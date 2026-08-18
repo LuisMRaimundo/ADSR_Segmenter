@@ -37,7 +37,7 @@ Next to your source files:
 - `_Sustains_Stable/` when **Regime refine** is **trim** (soft high brass, half-integer onset)
 - `segmentation_metadata.json` and `.csv` (plus optional `<stem>.flux.json` sidecar)
 
-Spectral-regime refinement watches the spectrum after level and pitch have already settled. Default **annotate** only records the stable window; **trim** also exports `_Sustains_Stable/`. Use the **soft_high_brass** preset (Very Long profile, flux ratio 2.0, pitch σ = 8 ¢) for *pp* high brass.
+Spectral-regime refinement watches the spectrum after level and pitch have already settled. Flux is level-normalised; half-integer bands are \(\pm 0.15\,f_0\) and a second walk (10 dB above the note’s own middle) catches tails that flux misses. Default **annotate** only records the stable window; **trim** also exports `_Sustains_Stable/`. Use the **soft_high_brass** preset (Very Long profile, flux ratio 2.0, pitch σ = 8 ¢) for *pp* high brass.
 
 ## 5. Presets at a glance
 

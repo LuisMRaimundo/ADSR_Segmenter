@@ -1,6 +1,6 @@
 # ADSR_Segmenter — Comprehensive Technical Manual
 
-**Version:** 3.2.0 (`adsr-segmenter`)  
+**Version:** 3.3.0 (`adsr-segmenter`)  
 **Repository:** [github.com/LuisMRaimundo/ADSR_Segmenter](https://github.com/LuisMRaimundo/ADSR_Segmenter)  
 **Audience:** Musicologists, acousticians, sound designers, and software engineers  
 **Copyright:** © 2026 Luís Raimundo. Proprietary research software — see `# Copyright and Use Notice.md`.
@@ -217,11 +217,12 @@ Thresholds are **relative to trimmed peak**, not absolute dBFS.
 
 ### 7.2 Algorithm summary
 
-1. YIN F0 on sustain slice (A0–C8)
-2. Cents deviation from median F0
-3. Vibrato-robust stability: linear detrend + moving-median residual
-4. Sliding-window seed search; optional expansion at \(1.25 \times\) stability tolerance
-5. Filename note hint (`Violin_A4.wav` → 440 Hz) biases window scoring
+1. Derive YIN `fmin`/`fmax` in this order: (a) note parsed from the filename ±1 octave; (b) `expected_note_hz` ±1 octave; (c) `pitch_fmin`/`pitch_fmax` (defaults 30–4200 Hz). The exact octave-below bin is excluded so the tracker cannot sit on \(f_0/2\).
+2. Frame length scales with `fmin`: \(\geq 4\,f_s/f_{\min}\), power of two, capped at 8192. Hop is unchanged.
+3. Cents deviation from median F0; vibrato-robust stability (linear detrend + moving-median residual).
+4. Sliding-window seed search; optional expansion at \(1.25 \times\) stability tolerance.
+5. **Failure / unvoiced:** if the voiced-frame fraction (frames within 200 ¢ of the median) is below `pitch_min_voiced_fraction` (0.5) → `failed_reason="unvoiced"`. If the best-window σ exceeds `pitch_fail_cents` (50) → `"tracking_failed"`. If \(|\mathrm{median}\,f_0 - f_{\mathrm{expected}}| > 300\) ¢ → `"octave_error"`. In all three cases `used=False`, energy boundaries are kept, and the regime stage receives `f0_hz=None`.
+6. Octave-wrap filename spellings (`B#`, `Cb`, `E#`, `Fb`) are resolved to the sounding pitch and flagged (`note_name_wrap_spelling`). A tracked median more than 300 ¢ from the parsed note (or more than 50 ¢ on a wrap spelling) sets `note_name_mismatch`.
 
 See [§12.7](#127-pitch-based-sustain-refinement).
 
@@ -229,16 +230,28 @@ See [§12.7](#127-pitch-based-sustain-refinement).
 
 ## 8. Spectral-regime refinement
 
-Level and pitch can be steady while the **oscillation regime** is not. A soft high brass note (Iowa tenor trombone, *pp*, C5, 1.54 s: `IOWA_Trb_T_pp_C5_Sustains.aiff`) has pitch σ of 2–5 cents everywhere and level flat within ±1 dB, yet median spectral flux is 0.39 in 0–0.3 s and 0.18 at 0.9–1.2 s against 0.14 in the stable middle, and the 1.5·f₀ band is 20 dB below H1 at the edges but 50 dB below in the middle. The energy plateau and `refine_sustain_by_pitch` are blind to that third non-stationarity. Spectral flux was already computed (`compute_spectral_flux`) but only used to sharpen attack in Advanced mode.
+Level and pitch can be steady while the **oscillation regime** is not. A soft high brass note (Iowa tenor trombone, *pp*, C5) can have pitch σ of 2–5 cents and level flat within ±1 dB while spectral flux and the half-integer bands still move. The energy plateau and `refine_sustain_by_pitch` are blind to that third non-stationarity.
+
+### Why relative
+
+v3.2 used absolute constants (Hz, dB, samples) tuned on a tenor-trombone C5. Those do not travel:
+
+- **Register.** A ±60 Hz band around 1.5·f₀ swallows H1 and H2 at E2 and is only meaningful above ~B3. Bands are now \(\pm\alpha f_0\) with \(\alpha=0.15\).
+- **Level.** Raw flux on a −41 dBFS excerpt of the same take is two orders of magnitude smaller than the full-level take. Regime flux is computed on a frame-energy-normalised magnitude (\( |X| / \sum|X| \)). The Advanced-mode attack detector still calls the unnormalised function so v3.1 attack MAEs do not move.
+- **Vibrato / tremolo.** A 6 Hz wobble must not look like a regime edge. The same moving-median window as the pitch stage is applied to the flux and half-integer tracks before the reference and the walks (`regime_vibrato_robust`).
+- **Multiphonics / sul ponticello.** A *steady* half-integer spectrum is not an edge: the HI walk is relative to the note’s own mid-sustain, so a constant multiphonic is not trimmed.
+- **Unpitched.** If pitch tracking fails or the material is unvoiced, `f0_hz=None`, `half_integer_valid=False`, and the stage runs on flux only.
 
 ### 8.1 Algorithm
 
-1. Compute flux on the same frame grid as the pitch stage (`frame_length`, `hop_length`).
-2. Restrict to the pitch-stable sustain `[t_att, t_dec]`. Reference = median flux over the central `regime_reference_fraction` (default 0.5).
-3. Smooth with a moving median of `regime_flux_median_frames` (default 9, odd).
-4. Walk inward from each end while smoothed flux > `regime_flux_ratio` × reference (default 2.0). The first passing frame is the candidate boundary.
-5. **Floor:** if the candidate span is shorter than `effective_regime_floor`, do not trim (`refused=True`). If the floor itself exceeds the available span, keep the inputs and set `refused_reason='span_below_floor'`.
-6. Mode **annotate** (default): returned times equal the inputs; `window_start` / `window_end` report the candidate. Mode **trim**: returned times are the candidate boundaries. `t_end` and decay/release logic are untouched.
+1. Resolve \(N_{\mathrm{STFT}}\): `regime_analysis_n_fft` if set, else the pitch-stage frame length, else `frame_length`. Report `analysis_n_fft_source ∈ {config, pitch_frame, frame_length}`.
+2. Compute **normalised** flux on the segmenter frame grid. Optionally low-pass with the vibrato median window, then the 9-frame moving median.
+3. Restrict to the pitch-stable sustain `[t_att, t_dec]`. Flux reference = median over the central `regime_reference_fraction` (default 0.5).
+4. **Flux walk:** inward from each end while smoothed flux > `regime_flux_ratio` × reference (default 2.0).
+5. **Half-integer walk** (if `half_integer_valid` and `regime_use_half_integer`): bands \(\pm\alpha f_0\) around \(f_0\), \(1.5 f_0\), and \(2.5 f_0\). Gate if \(f_0\) is missing (`no_f0`) or \(\alpha f_0 < 2\,f_s/N_{\mathrm{STFT}}\) (`band_below_resolution`). Reference = median HI ratio (dB) over the same central fraction; walk inward while \(\mathrm{ratio} - \mathrm{reference} > \) `regime_hi_rise_db` (10 dB).
+6. **Combination:** on each side the final boundary is the **more conservative (inner)** of the flux and HI candidates. `boundary_source_* ∈ {flux, half_integer, none}`.
+7. **Floor:** applied to the *combined* result exactly as in v3.2. If the candidate span is shorter than `effective_regime_floor`, do not trim (`refused=True`). If the floor itself exceeds the available span, keep the inputs and set `refused_reason='span_below_floor'`.
+8. Mode **annotate** (default): returned times equal the inputs; `window_start` / `window_end` report the candidate. Mode **trim**: returned times are the candidate boundaries. `t_end` and decay/release logic are untouched.
 
 \[
 t_{\mathrm{floor}} = \max\!\left(
@@ -247,19 +260,22 @@ t_{\mathrm{floor}} = \max\!\left(
 \right)
 \]
 
-with \(N_{\mathrm{STFT}} =\) `regime_analysis_n_fft` or `frame_length`. See [docs/REGIME_REFINE_NOTES.md](REGIME_REFINE_NOTES.md) for why each default was chosen.
+See [docs/REGIME_REFINE_NOTES.md](REGIME_REFINE_NOTES.md) for why each default was chosen.
 
 ### 8.2 Metadata keys (`regime_refine`)
 
-Always present, `None` when not applicable: `used`, `mode`, `flux_reference`, `flux_edge_ratio_start`, `flux_edge_ratio_end`, `window_start`, `window_end`, `window_duration`, `trimmed_start_s`, `trimmed_end_s`, `refused`, `refused_reason`, `floor_seconds`, `floor_windows`, `analysis_n_fft`, `half_integer_ratio_db_edges`, `half_integer_ratio_db_middle`.
+Always present, `None` when not applicable: `used`, `mode`, `flux_reference`, `flux_edge_ratio_start`, `flux_edge_ratio_end`, `window_start`, `window_end`, `window_duration`, `trimmed_start_s`, `trimmed_end_s`, `refused`, `refused_reason`, `floor_seconds`, `floor_windows`, `analysis_n_fft`, `analysis_n_fft_source`, `half_integer_ratio_db_edges`, `half_integer_ratio_db_middle`, `half_integer_valid`, `half_integer_bandwidth_hz`, `hi_reference_db`, `hi_edge_rise_db_start`, `hi_edge_rise_db_end`, `hi_trimmed_start_s`, `hi_trimmed_end_s`, `boundary_source_start`, `boundary_source_end`.
 
 ### 8.3 Flux sidecar (`--flux-sidecar` / GUI checkbox)
 
-`<stem>.flux.json` on the sustain frame grid:
+`<stem>.flux.json` on the sustain frame grid. Existing keys are unchanged; v3.3 adds `flux_normalised`, `half_integer_valid`, `hi_bandwidth_hz`, `f0_hz`, `pitch_frame_length`, and the smoothed tracks:
 
 ```json
 {"sr": 44100, "hop_length": 512, "n_fft": 1024,
- "times": [0.0, ...], "flux": [...], "half_integer_ratio_db": [...]}
+ "times": [0.0, ...], "flux": [...], "half_integer_ratio_db": [...],
+ "flux_normalised": true, "half_integer_valid": true,
+ "hi_bandwidth_hz": 78.5, "f0_hz": 523.25, "pitch_frame_length": 1024,
+ "flux_smoothed": [...], "half_integer_ratio_db_smoothed": [...]}
 ```
 
 A downstream analyser can weight or median frames without recomputing STFT.
@@ -269,7 +285,7 @@ A downstream analyser can weight or median frames without recomputing STFT.
 | Mode | `_Sustains/` | `_Sustains_Stable/` | Use |
 |------|----------------|----------------------|-----|
 | **annotate** (default) | Energy + pitch (unchanged) | not written | STFT / spectral work; keep every available period |
-| **trim** | Energy + pitch (unchanged) | flux-stable window | Sampler cores that must drop a half-integer onset |
+| **trim** | Energy + pitch (unchanged) | flux- and/or HI-stable window | Sampler cores that must drop a half-integer onset or tail |
 | **off** | Energy + pitch | not written | `regime_refine == {}` |
 
 Prefer **annotate** unless the exported sustain itself must exclude the unstable regime. Prefer **trim** for soft high brass (`soft_high_brass` preset).
@@ -335,6 +351,13 @@ JSON per-file keys include `segments.attack_end`, `decay_start`, `end`, `duratio
 | `DEFAULT_VIBRATO_MEDIAN_WINDOW_S` | 0.12 | Vibrato suppression window (s) |
 | `DEFAULT_PITCH_REFINE_MIN_FRACTION` | 0.70 | Min refined / energy sustain ratio |
 | `DEFAULT_SUSTAIN_FRACTION_BEFORE_DECAY` | 0.75 | Decay guard through proportional sustain |
+| `DEFAULT_PITCH_FMIN_HZ` | 30.0 | Fallback YIN lower bound |
+| `DEFAULT_PITCH_FMAX_HZ` | 4200.0 | Fallback YIN upper bound |
+| `DEFAULT_PITCH_FAIL_CENTS` | 50.0 | Best-window σ that marks tracking failure |
+| `DEFAULT_PITCH_OCTAVE_FAIL_CENTS` | 300.0 | Median vs expected → `octave_error` |
+| `DEFAULT_PITCH_MIN_VOICED_FRACTION` | 0.5 | Consistent-frame fraction for “voiced” |
+| `DEFAULT_REGIME_HI_REL_BANDWIDTH` | 0.15 | \(\alpha\) for \(\pm\alpha f_0\) HI bands |
+| `DEFAULT_REGIME_HI_RISE_DB` | 10.0 | HI walk vs mid-sustain reference |
 
 ### 10.2 `SegmentConfig` dataclass defaults
 
@@ -371,8 +394,16 @@ These are the **authoritative detection defaults** used by the core library, CLI
 | `regime_reference_fraction` | 0.5 | fraction | Central span used as flux reference |
 | `regime_min_windows` | 20 | windows | Floor in downstream STFT hops |
 | `regime_min_duration` | 1.0 | s | Floor in seconds |
-| `regime_analysis_n_fft` | `None` | samples | Downstream STFT size (`frame_length` if None) |
-| `regime_half_integer` | `True` | bool | Report 1.5·f₀ / 2.5·f₀ vs f₀ (dB) |
+| `regime_analysis_n_fft` | `None` | samples | Downstream STFT size (pitch frame if None) |
+| `regime_half_integer` | `True` | bool | Compute 1.5·f₀ / 2.5·f₀ vs f₀ (dB) |
+| `regime_hi_rel_bandwidth` | 0.15 | fraction of f₀ | Half-width of HI and H1 bands |
+| `regime_use_half_integer` | `True` | bool | Second inward walk on the HI ratio |
+| `regime_hi_rise_db` | 10.0 | dB | Walk while ratio − mid-sustain reference exceeds this |
+| `regime_vibrato_robust` | `True` | bool | Moving-median on flux / HI before walks |
+| `pitch_fmin` | 30.0 | Hz | Fallback YIN lower bound |
+| `pitch_fmax` | 4200.0 | Hz | Fallback YIN upper bound |
+| `pitch_fail_cents` | 50.0 | cents | Best-window σ → `tracking_failed` |
+| `pitch_min_voiced_fraction` | 0.5 | fraction | Consistent frames required to treat as voiced |
 
 **Effective minimum sustain:**
 
@@ -515,7 +546,7 @@ Magnitude \(|X[k,\ell]|\). **Spectral flux** (half-wave rectified frame differen
 \Phi[\ell] = \sum_{k=0}^{N_f/2} \max\!\left(|X[k,\ell+1]| - |X[k,\ell]|,\; 0\right)
 \]
 
-Used in Advanced attack detection to capture onset even when RMS rises slowly.
+The regime stage first normalises each frame, \(\tilde{X}[k,\ell] = |X[k,\ell]| / \sum_k |X[k,\ell]|\), so \(\Phi\) is level-independent (`normalised=True`). Advanced-mode attack detection keeps the unnormalised call (`normalised=False`) so v3.1 attack MAEs do not move.
 
 ### 11.5 Proportional mode
 
@@ -663,7 +694,7 @@ If \(\hat{V} < \tau_v\) (`sustain_variance_threshold` = 0.2) and duration \(\geq
 
 #### 11.8.1 YIN fundamental frequency
 
-On sustain slice \(y_{\mathrm{sus}}\), librosa YIN estimates \(f_0[k]\) for frames with \(f_{\min} = \mathrm{Hz}(\mathrm{A0})\) to \(f_{\max} = \mathrm{Hz}(\mathrm{C8})\).
+On sustain slice \(y_{\mathrm{sus}}\), librosa YIN estimates \(f_0[k]\). Search bounds come from the filename note or `expected_note_hz` (±1 octave, excluding the exact subharmonic) else `pitch_fmin`–`pitch_fmax` (30–4200 Hz). The analysis frame is \(\geq 4\,f_s/f_{\min}\) (power of two, ≤ 8192).
 
 Valid frames: \(\mathcal{V} = \{k : \mathrm{finite}(f_0[k]) \land f_0[k] > 0\}\).
 
@@ -1189,6 +1220,7 @@ Metrics: MAE for \(t_{\mathrm{att}}\), \(t_{\mathrm{dec}}\), \(t_{\mathrm{end}}\
 | `test_advanced_features.py` | Vibrato robust, Hann vs cosine, long-note guard, annotate, batch I/O |
 | `test_benchmark.py` | Corpus generation, MAE aggregation, template |
 | `test_regime_refine.py` | Steady tone, half-integer onset, floor refusal, annotate, sidecar |
+| `test_regime_generalise.py` | Relative HI bands, dual walk, vibrato, level, pitch failure, unvoiced, floor scaling |
 
 Key regression: 6 s note sustain ≥ 2.8 s; annotate mode preserves energy boundaries.
 
@@ -1204,6 +1236,9 @@ Key regression: 6 s note sustain ≥ 2.8 s; annotate mode preserves energy bound
 | Sustain too short | Pitch crop / tight refine | annotate or expand; Very Long preset |
 | Soft brass still has “fizz” after attack | Unstable half-integer regime | Regime **trim** or `soft_high_brass`; or keep annotate + sidecar |
 | `regime_refine.refused` is true | Candidate shorter than STFT floor | Lower `regime_analysis_n_fft`, or keep annotate and use the sidecar |
+| `half_integer_valid` is false | No f₀, or \(\alpha f_0\) below bin resolution | Expected on E2-class notes at `n_fft=1024`; flux walk still runs |
+| `pitch_refine.failed` / `unvoiced` | Tracker lost the note or the take is unpitched | Energy boundaries kept; regime uses flux only |
+| `note_name_mismatch` | Filename spelling disagrees with tracked f₀ | Check wrap spellings (`B#4` = C5) and file naming |
 | All segments similar length | Proportional-only | Enable Smart Mode |
 | MP3 slow/fails | Codec | Convert to WAV for batch jobs |
 
@@ -1235,8 +1270,12 @@ DEFAULT_HOP_LENGTH = 512
 DEFAULT_ZERO_CROSSING_SEARCH_MS = 100.0
 DEFAULT_PITCH_REFINE_MIN_FRACTION = 0.70
 DEFAULT_SUSTAIN_FRACTION_BEFORE_DECAY = 0.75
+DEFAULT_PITCH_FMIN_HZ = 30.0
+DEFAULT_PITCH_FMAX_HZ = 4200.0
+DEFAULT_REGIME_HI_REL_BANDWIDTH = 0.15
+DEFAULT_REGIME_HI_RISE_DB = 10.0
 ```
 
 ---
 
-*Document for ADSR_Segmenter v3.2.0. Synchronized with `audio_segment_core.py`, `ALL_PRESETS`, and `SegmentConfig`. Last updated: August 2026.*
+*Document for ADSR_Segmenter v3.3.0. Synchronized with `audio_segment_core.py`, `ALL_PRESETS`, and `SegmentConfig`. Last updated: August 2026.*

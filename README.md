@@ -46,12 +46,12 @@ Entry points after install: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-se
 |---------------|---------|
 | `_Attacks/` | Onset → attack boundary |
 | `_Sustains/` | Attack → decay boundary |
-| `_Sustains_Stable/` | Flux-stable sustain (only when regime refine is `trim`) |
+| `_Sustains_Stable/` | Flux- and/or half-integer-stable sustain (only when regime refine is `trim`) |
 | `_Decays/` | Decay → end of active sound |
 | `_Release_Silence/` | Tail after active energy |
 | `_Full_Active_Sound/` | Full trimmed active region |
 
-Detection modes: **smart** (energy + proportional anchors, default), **advanced** (spectral flux + derivatives), **proportional**. Pitch refinement: **expand** (default), **annotate** (full sustain for STFT + metadata), **crop** (tight stable window). Spectral-regime refinement: **annotate** (default, metadata only), **trim** (also writes `_Sustains_Stable/`), or **off**. Optional `--flux-sidecar` writes `<stem>.flux.json` on the sustain frame grid.
+Detection modes: **smart** (energy + proportional anchors, default), **advanced** (spectral flux + derivatives), **proportional**. Pitch refinement: **expand** (default), **annotate** (full sustain for STFT + metadata), **crop** (tight stable window). Spectral-regime refinement: **annotate** (default, metadata only), **trim** (also writes `_Sustains_Stable/`), or **off**. Regime flux is level-normalised; half-integer bands are relative to \(f_0\). Optional `--flux-sidecar` writes `<stem>.flux.json` on the sustain frame grid.
 
 ---
 
