@@ -11,10 +11,10 @@ unchanged from v3.1 / v3.2.
 |-----------|---------|-----|
 | `use_regime_refine` | `True` | Always compute the stationarity window so metadata is available. Export is unchanged unless mode is `trim`. |
 | `regime_refine_mode` | `"annotate"` | Metadata-only. Downstream STFT pipelines keep the full pitch-stable sustain; nothing is cropped by default. |
-| `regime_flux_ratio` | `2.0` | On the Iowa tenor trombone *pp* C5 reference, median flux is ~0.39 in 0–0.3 s and ~0.14 in the stable middle (ratio ≈ 2.8). A factor of two clears that onset regime without eating ordinary vibrato or bow noise. The trim decision stays a **ratio**, now applied to level-normalised flux. |
+| `regime_flux_ratio` | `2.0` | Unnormalised flux walk (Advanced attack path, and `flux_normalised=False`). Kept at the v3.2 value so that path does not move. |
 | `regime_flux_median_frames` | `9` (odd) | ~100 ms at hop 512 / 44.1 kHz. Long enough to ignore a single noisy frame, short enough not to smear a 100 ms interior burst into the edges. |
 | `regime_reference_fraction` | `0.5` | Central half of the pitch-stable sustain is the “already settled” region. Avoids contaminating the reference with the very edges being tested. Shared by the flux walk and the half-integer walk. |
-| `regime_min_windows` | `20` | Floor in non-overlapping analysis frames: `20 × n_fft / sr`. At `n_fft=8192`, 44.1 kHz this is ~3.7 s; at the core default 1024 it is ~0.46 s and is dominated by `regime_min_duration`. |
+| `regime_min_windows` | `8` | Floor in non-overlapping analysis frames: `8 × n_fft / sr`. Was 20 in v3.3.0; at low-register `n_fft ≥ 4096` that refused every ~2.5 s one-shot (`20 × 4096 / 22050 ≈ 3.7 s`) *before* writing diagnostics. Eight windows at 4096 / 22.05 kHz is ~1.5 s, so `regime_min_duration` (1.0 s) still dominates mid-register grains while a 2.5 s E2 is analysable. Configurable. |
 | `regime_min_duration` | `1.0` s | Hard time floor so a trim can never leave less than one second — the practical minimum for a useful long-window STFT. Unchanged in v3.3. |
 | `regime_half_integer` | `True` | Compute the 1.5·f₀ + 2.5·f₀ vs f₀ ratio (now also used as a second walk when valid). |
 
@@ -33,6 +33,14 @@ unchanged from v3.1 / v3.2.
 | Octave / naming | `300` ¢ | If \(\lvert\mathrm{median}\,f_0 - f_{\mathrm{expected}}\rvert > 300\) ¢ → `octave_error` (Iowa E2 tracked 201 Hz against 82 Hz). Filename wrap spellings (`B#`, `Cb`, `E#`, `Fb`) are resolved (`B#4` = C5) and flagged; a >300 ¢ (or >50 ¢ on a wrap) disagreement also sets `note_name_mismatch`. |
 | `pitch_min_voiced_fraction` | `0.5` | Fraction of frames within 200 ¢ of the median. Below this: `failed_reason="unvoiced"`, energy boundaries kept, regime on flux only. |
 
+## v3.3.1
+
+| Parameter | Default | Why |
+|-----------|---------|-----|
+| `regime_flux_ratio_normalised` | `1.5` | Walk threshold when regime flux is frame-energy-normalised. Set on the Iowa trombone *pp* batch: clean notes had edge / reference ≤ 1.35, C5 reached 1.83. **Must be validated on one string batch and one woodwind batch** before treating 1.5 as instrument-general. Reported as `flux_ratio_applied`. |
+| HI `n_fft` | pitch frame, else `max(frame_length, 4096)` | The half-integer track is no longer computed on the flux-grid 1024-point STFT. At 82 Hz, `α·f₀` is resolvable at 4096 (`half_integer_valid=True`). Sidecar key `hi_n_fft`. |
+| `half_integer_invalid_reason` | — | Always filled when `half_integer_valid` is False: `band_below_resolution` / `no_f0` / `refused`. |
+
 ## Level-independent flux
 
 `compute_spectral_flux(..., normalised=False)` keeps the v3.1 signature. Each frame’s magnitude is divided by its sum when `normalised=True` (regime stage and flux sidecar only). `flux_reference` is then comparable across files and across a −40 dB gain; the trim decision remains a ratio.
@@ -45,7 +53,7 @@ floor_seconds = max(regime_min_duration,
                     regime_min_windows * n_fft / sr)
 ```
 
-If the pitch-stable span is already shorter than the floor, or a candidate trim would go below it, the stage sets `refused=True`, `refused_reason='span_below_floor'`, and keeps the incoming boundaries. The floor is applied to the **combined** (inner) flux + HI result.
+The floor gates **trim only**. Flux / HI diagnostics and `window_*` (the annotate candidate) are always computed when frames exist. If the pitch-stable span or the combined candidate is shorter than the floor, the stage sets `refused=True`, `refused_reason='span_below_floor'`, and keeps the incoming boundaries. Those fields must never be `None` *because* of the floor.
 
 ## Two-walk combination
 

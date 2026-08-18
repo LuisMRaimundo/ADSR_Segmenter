@@ -60,7 +60,7 @@ class ADSRSegmenter:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("ADSR_Segmenter v3.3 — Smart Detection")
+        self.root.title("ADSR_Segmenter v3.3.1 — Smart Detection")
         self.root.geometry("1000x920")
         
         # Configuration

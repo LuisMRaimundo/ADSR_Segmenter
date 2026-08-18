@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.3.1 — 2026-08-18
+
+Three regime-stage fixes; other defaults unchanged.
+
+- Floor gates **trim only**: when the candidate would fall below the floor, `refused=True` and boundaries stay put, but `flux_reference`, edge ratios, HI reference/rises, and `window_*` are still filled.
+- Default `regime_min_windows` is 8 (was 20) so a 2.5 s one-shot at low-register `n_fft ≥ 4096` is not refused before diagnostics exist.
+- Half-integer STFT uses the pitch frame (`hi_n_fft`; fallback `max(frame_length, 4096)`). `half_integer_invalid_reason` is always set when invalid.
+- `regime_flux_ratio_normalised` (default 1.5) is the walk threshold on the normalised path; `regime_flux_ratio=2.0` remains for unnormalised flux. The applied value is reported.
+
 ## 3.3.0 — 2026-08-18
 
 Make the regime and pitch stages register- and instrument-independent.
