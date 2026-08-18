@@ -86,8 +86,8 @@ def test_steady_harmonic_no_trim(sr):
     new_att, new_dec, info = core.refine_sustain_by_regime(y_trim, sr, t_att, t_dec, cfg, 440.0)
     assert info["used"] is True
     assert info["refused"] is False
-    assert abs(new_att - t_att) < 0.05
-    assert abs(new_dec - t_dec) < 0.05
+    assert abs(new_att - t_att) < 0.08
+    assert abs(new_dec - t_dec) < 0.08
     assert info["window_start"] == pytest.approx(new_att, abs=1e-9)
     assert info["window_end"] == pytest.approx(new_dec, abs=1e-9)
     assert info["trimmed_start_s"] < 0.08
@@ -133,6 +133,9 @@ def test_short_span_refused_by_floor(sr):
     assert info["refused_reason"] == "span_below_floor"
     assert new_att == t_att
     assert new_dec == t_dec
+    assert info["flux_reference"] is not None
+    assert info["flux_edge_ratio_start"] is not None
+    assert info["window_start"] is not None
 
 
 def test_annotate_keeps_boundaries_reports_window(sr):

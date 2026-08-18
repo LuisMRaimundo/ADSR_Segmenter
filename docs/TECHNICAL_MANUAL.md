@@ -1,6 +1,6 @@
 # ADSR_Segmenter — Comprehensive Technical Manual
 
-**Version:** 3.3.0 (`adsr-segmenter`)  
+**Version:** 3.3.1 (`adsr-segmenter`)  
 **Repository:** [github.com/LuisMRaimundo/ADSR_Segmenter](https://github.com/LuisMRaimundo/ADSR_Segmenter)  
 **Audience:** Musicologists, acousticians, sound designers, and software engineers  
 **Copyright:** © 2026 Luís Raimundo. Proprietary research software — see `# Copyright and Use Notice.md`.
@@ -247,10 +247,10 @@ v3.2 used absolute constants (Hz, dB, samples) tuned on a tenor-trombone C5. Tho
 1. Resolve \(N_{\mathrm{STFT}}\): `regime_analysis_n_fft` if set, else the pitch-stage frame length, else `frame_length`. Report `analysis_n_fft_source ∈ {config, pitch_frame, frame_length}`.
 2. Compute **normalised** flux on the segmenter frame grid. Optionally low-pass with the vibrato median window, then the 9-frame moving median.
 3. Restrict to the pitch-stable sustain `[t_att, t_dec]`. Flux reference = median over the central `regime_reference_fraction` (default 0.5).
-4. **Flux walk:** inward from each end while smoothed flux > `regime_flux_ratio` × reference (default 2.0).
+4. **Flux walk:** inward from each end while smoothed flux > *applied ratio* × reference. The applied ratio is `regime_flux_ratio_normalised` (default 1.5) when flux is normalised, else `regime_flux_ratio` (2.0). Reported as `flux_ratio_applied`.
 5. **Half-integer walk** (if `half_integer_valid` and `regime_use_half_integer`): bands \(\pm\alpha f_0\) around \(f_0\), \(1.5 f_0\), and \(2.5 f_0\). Gate if \(f_0\) is missing (`no_f0`) or \(\alpha f_0 < 2\,f_s/N_{\mathrm{STFT}}\) (`band_below_resolution`). Reference = median HI ratio (dB) over the same central fraction; walk inward while \(\mathrm{ratio} - \mathrm{reference} > \) `regime_hi_rise_db` (10 dB).
 6. **Combination:** on each side the final boundary is the **more conservative (inner)** of the flux and HI candidates. `boundary_source_* ∈ {flux, half_integer, none}`.
-7. **Floor:** applied to the *combined* result exactly as in v3.2. If the candidate span is shorter than `effective_regime_floor`, do not trim (`refused=True`). If the floor itself exceeds the available span, keep the inputs and set `refused_reason='span_below_floor'`.
+7. **Floor:** gates **trim only**. Diagnostics (`flux_reference`, edge ratios, HI reference/rises, `window_*`) are always computed when frames exist. If the incoming span or the combined candidate is shorter than `effective_regime_floor`, set `refused=True`, `refused_reason='span_below_floor'`, and leave the incoming boundaries unchanged.
 8. Mode **annotate** (default): returned times equal the inputs; `window_start` / `window_end` report the candidate. Mode **trim**: returned times are the candidate boundaries. `t_end` and decay/release logic are untouched.
 
 \[
@@ -264,7 +264,7 @@ See [docs/REGIME_REFINE_NOTES.md](REGIME_REFINE_NOTES.md) for why each default w
 
 ### 8.2 Metadata keys (`regime_refine`)
 
-Always present, `None` when not applicable: `used`, `mode`, `flux_reference`, `flux_edge_ratio_start`, `flux_edge_ratio_end`, `window_start`, `window_end`, `window_duration`, `trimmed_start_s`, `trimmed_end_s`, `refused`, `refused_reason`, `floor_seconds`, `floor_windows`, `analysis_n_fft`, `analysis_n_fft_source`, `half_integer_ratio_db_edges`, `half_integer_ratio_db_middle`, `half_integer_valid`, `half_integer_bandwidth_hz`, `hi_reference_db`, `hi_edge_rise_db_start`, `hi_edge_rise_db_end`, `hi_trimmed_start_s`, `hi_trimmed_end_s`, `boundary_source_start`, `boundary_source_end`.
+Always present, `None` when not applicable: `used`, `mode`, `flux_reference`, `flux_edge_ratio_start`, `flux_edge_ratio_end`, `flux_normalised`, `flux_ratio_applied`, `window_start`, `window_end`, `window_duration`, `trimmed_start_s`, `trimmed_end_s`, `refused`, `refused_reason`, `floor_seconds`, `floor_windows`, `analysis_n_fft`, `analysis_n_fft_source`, `half_integer_ratio_db_edges`, `half_integer_ratio_db_middle`, `half_integer_valid`, `half_integer_invalid_reason`, `half_integer_bandwidth_hz`, `hi_n_fft`, `hi_reference_db`, `hi_edge_rise_db_start`, `hi_edge_rise_db_end`, `hi_trimmed_start_s`, `hi_trimmed_end_s`, `boundary_source_start`, `boundary_source_end`.
 
 ### 8.3 Flux sidecar (`--flux-sidecar` / GUI checkbox)
 
@@ -274,7 +274,7 @@ Always present, `None` when not applicable: `used`, `mode`, `flux_reference`, `f
 {"sr": 44100, "hop_length": 512, "n_fft": 1024,
  "times": [0.0, ...], "flux": [...], "half_integer_ratio_db": [...],
  "flux_normalised": true, "half_integer_valid": true,
- "hi_bandwidth_hz": 78.5, "f0_hz": 523.25, "pitch_frame_length": 1024,
+ "hi_bandwidth_hz": 78.5, "hi_n_fft": 1024, "f0_hz": 523.25, "pitch_frame_length": 1024,
  "flux_smoothed": [...], "half_integer_ratio_db_smoothed": [...]}
 ```
 
@@ -389,10 +389,11 @@ These are the **authoritative detection defaults** used by the core library, CLI
 | `sustain_fraction_before_decay` | 0.75 | ratio | Earliest decay guard |
 | `use_regime_refine` | `True` | bool | Enable spectral-regime stage |
 | `regime_refine_mode` | `"annotate"` | enum | `annotate` / `trim` |
-| `regime_flux_ratio` | 2.0 | ratio | Walk inward while flux > ratio × reference |
+| `regime_flux_ratio` | 2.0 | ratio | Unnormalised flux walk threshold |
+| `regime_flux_ratio_normalised` | 1.5 | ratio | Normalised flux walk threshold (regime default) |
 | `regime_flux_median_frames` | 9 | frames | Odd moving-median on flux |
 | `regime_reference_fraction` | 0.5 | fraction | Central span used as flux reference |
-| `regime_min_windows` | 20 | windows | Floor in downstream STFT hops |
+| `regime_min_windows` | 8 | windows | Floor in downstream STFT hops |
 | `regime_min_duration` | 1.0 | s | Floor in seconds |
 | `regime_analysis_n_fft` | `None` | samples | Downstream STFT size (pitch frame if None) |
 | `regime_half_integer` | `True` | bool | Compute 1.5·f₀ / 2.5·f₀ vs f₀ (dB) |
@@ -446,7 +447,7 @@ Percentages are normalized to sum to 1 internally if needed.
 | Long (3.0–6.0s) | 0.10 | 0.70 | 0.20 | 60 | 0.60 | 0.90 | 0.45 | expand, min_frac 0.72 |
 | Very Long (> 6.0s) | 0.08 | 0.75 | 0.17 | 70 | 1.00 | 0.90 | 0.40 | expand, min_frac 0.75 |
 | Custom | 0.15 | 0.60 | 0.25 | 50 | 0.35 | 0.90 | 0.50 | — |
-| soft_high_brass | 0.08 | 0.75 | 0.17 | 70 | 1.00 | 0.90 | 0.40 | trim, flux ratio 2.0, pitch σ = 8¢ |
+| soft_high_brass | 0.08 | 0.75 | 0.17 | 70 | 1.00 | 0.90 | 0.40 | trim, normalised flux ratio 1.5, pitch σ = 8¢ |
 
 Every preset also carries the regime-annotate keys (`use_regime_refine=True`, `regime_refine_mode="annotate"`, …) except `soft_high_brass`, which sets `trim`.
 
@@ -1278,4 +1279,4 @@ DEFAULT_REGIME_HI_RISE_DB = 10.0
 
 ---
 
-*Document for ADSR_Segmenter v3.3.0. Synchronized with `audio_segment_core.py`, `ALL_PRESETS`, and `SegmentConfig`. Last updated: August 2026.*
+*Document for ADSR_Segmenter v3.3.1. Synchronized with `audio_segment_core.py`, `ALL_PRESETS`, and `SegmentConfig`. Last updated: August 2026.*

@@ -35,6 +35,9 @@ DEFAULT_PITCH_OCTAVE_FAIL_CENTS = 300.0
 DEFAULT_PITCH_MIN_VOICED_FRACTION = 0.5
 DEFAULT_REGIME_HI_REL_BANDWIDTH = 0.15
 DEFAULT_REGIME_HI_RISE_DB = 10.0
+DEFAULT_REGIME_MIN_WINDOWS = 8
+DEFAULT_REGIME_FLUX_RATIO_NORMALISED = 1.5
+DEFAULT_HI_N_FFT_FLOOR = 4096
 NOTE_WRAP_SPELLINGS = {("B", "#"), ("C", "b"), ("E", "#"), ("F", "b")}
 
 SUPPORTED_AUDIO_EXTENSIONS = {
@@ -152,9 +155,10 @@ _REGIME_ANNOTATE_KEYS = {
     "use_regime_refine": True,
     "regime_refine_mode": "annotate",
     "regime_flux_ratio": 2.0,
+    "regime_flux_ratio_normalised": DEFAULT_REGIME_FLUX_RATIO_NORMALISED,
     "regime_flux_median_frames": 9,
     "regime_reference_fraction": 0.5,
-    "regime_min_windows": 20,
+    "regime_min_windows": DEFAULT_REGIME_MIN_WINDOWS,
     "regime_min_duration": 1.0,
     "regime_analysis_n_fft": None,
     "regime_half_integer": True,
@@ -211,10 +215,11 @@ class SegmentConfig:
     sustain_fraction_before_decay: float = DEFAULT_SUSTAIN_FRACTION_BEFORE_DECAY
     use_regime_refine: bool = True
     regime_refine_mode: str = "annotate"        # annotate | trim
-    regime_flux_ratio: float = 2.0              # edge trimmed while flux > ratio × reference
+    regime_flux_ratio: float = 2.0              # unnormalised flux walk (advanced attack path)
+    regime_flux_ratio_normalised: float = DEFAULT_REGIME_FLUX_RATIO_NORMALISED
     regime_flux_median_frames: int = 9          # odd; moving-median length on the flux track
     regime_reference_fraction: float = 0.5      # central fraction of the pitch-stable sustain used as reference
-    regime_min_windows: int = 20                # floor: minimum non-overlapping analysis windows after trim
+    regime_min_windows: int = DEFAULT_REGIME_MIN_WINDOWS  # floor: min non-overlapping analysis windows after trim
     regime_min_duration: float = 1.0            # floor: minimum seconds after trim
     regime_analysis_n_fft: Optional[int] = None # downstream STFT size; if None use pitch frame
     regime_half_integer: bool = True            # also compute the half-integer band ratio (needs f0)
@@ -250,9 +255,12 @@ class SegmentConfig:
             "use_regime_refine": preset.get("use_regime_refine", True),
             "regime_refine_mode": preset.get("regime_refine_mode", "annotate"),
             "regime_flux_ratio": preset.get("regime_flux_ratio", 2.0),
+            "regime_flux_ratio_normalised": preset.get(
+                "regime_flux_ratio_normalised", DEFAULT_REGIME_FLUX_RATIO_NORMALISED
+            ),
             "regime_flux_median_frames": preset.get("regime_flux_median_frames", 9),
             "regime_reference_fraction": preset.get("regime_reference_fraction", 0.5),
-            "regime_min_windows": preset.get("regime_min_windows", 20),
+            "regime_min_windows": preset.get("regime_min_windows", DEFAULT_REGIME_MIN_WINDOWS),
             "regime_min_duration": preset.get("regime_min_duration", 1.0),
             "regime_analysis_n_fft": preset.get("regime_analysis_n_fft"),
             "regime_half_integer": preset.get("regime_half_integer", True),
@@ -906,6 +914,13 @@ def resolve_analysis_n_fft(
     return int(cfg.frame_length), "frame_length"
 
 
+def resolve_hi_n_fft(cfg: SegmentConfig, pitch_frame_length: Optional[int] = None) -> int:
+    """STFT size for the half-integer track: pitch frame, else max(frame_length, 4096)."""
+    if pitch_frame_length is not None and int(pitch_frame_length) > 0:
+        return int(pitch_frame_length)
+    return max(int(cfg.frame_length), DEFAULT_HI_N_FFT_FLOOR)
+
+
 def compute_half_integer_ratio_db(
     y: np.ndarray,
     sr: int,
@@ -992,8 +1007,12 @@ def _regime_info_template(cfg: SegmentConfig) -> Dict:
         "half_integer_ratio_db_edges": None,
         "half_integer_ratio_db_middle": None,
         "half_integer_valid": None,
+        "half_integer_invalid_reason": None,
         "half_integer_bandwidth_hz": None,
+        "hi_n_fft": None,
         "hi_reference_db": None,
+        "flux_normalised": None,
+        "flux_ratio_applied": None,
         "hi_edge_rise_db_start": None,
         "hi_edge_rise_db_end": None,
         "hi_trimmed_start_s": None,
@@ -1052,17 +1071,25 @@ def refine_sustain_by_regime(
     cfg: SegmentConfig,
     f0_hz: Optional[float] = None,
     pitch_frame_length: Optional[int] = None,
+    flux_normalised: bool = True,
 ) -> Tuple[float, float, Dict]:
     """
     Third refinement stage. Uses spectral flux stationarity on the pitch-stable sustain,
     optionally combined with a relative half-integer walk.
     In mode 'annotate' the returned times equal the inputs and the window is reported
     in info only; in mode 'trim' the returned times are the candidate boundaries.
+    The floor gates applying a trim only: diagnostics are always filled when frames exist.
     """
     info = _regime_info_template(cfg)
     analysis_n_fft, nfft_src = resolve_analysis_n_fft(cfg, pitch_frame_length)
+    hi_n_fft = resolve_hi_n_fft(cfg, pitch_frame_length)
     info["analysis_n_fft"] = int(analysis_n_fft)
     info["analysis_n_fft_source"] = nfft_src
+    info["hi_n_fft"] = int(hi_n_fft)
+    info["flux_normalised"] = bool(flux_normalised)
+    info["flux_ratio_applied"] = float(
+        cfg.regime_flux_ratio_normalised if flux_normalised else cfg.regime_flux_ratio
+    )
     floor_s = effective_regime_floor(cfg, sr, analysis_n_fft)
     info["floor_seconds"] = float(floor_s)
     info["used"] = True
@@ -1072,6 +1099,11 @@ def refine_sustain_by_regime(
     t_att_rel = float(t_att_rel)
     t_dec_rel = float(t_dec_rel)
     span = max(0.0, t_dec_rel - t_att_rel)
+
+    def _set_hi_invalid(reason: str) -> None:
+        info["half_integer_valid"] = False
+        info["half_integer_invalid_reason"] = reason
+        info["half_integer_reason"] = reason
 
     def _keep(reason: Optional[str]) -> Tuple[float, float, Dict]:
         info["refused"] = True
@@ -1083,19 +1115,19 @@ def refine_sustain_by_regime(
         info["trimmed_end_s"] = 0.0
         info["hi_trimmed_start_s"] = 0.0
         info["hi_trimmed_end_s"] = 0.0
+        if info.get("half_integer_invalid_reason") is None:
+            _set_hi_invalid("no_f0" if not (f0_hz and f0_hz > 0) else "refused")
         return t_att_rel, t_dec_rel, info
 
     if span <= 0.0 or len(y_trimmed) < cfg.frame_length:
-        return _keep("span_below_floor" if span < floor_s else "insufficient_frames")
-    if floor_s > span:
-        return _keep("span_below_floor")
+        return _keep("insufficient_frames")
 
     flux, times = compute_spectral_flux(
         y_trimmed,
         sr,
         frame_length=cfg.frame_length,
         hop_length=cfg.hop_length,
-        normalised=True,
+        normalised=bool(flux_normalised),
     )
     mask = (times >= t_att_rel) & (times <= t_dec_rel)
     if int(np.count_nonzero(mask)) < 3:
@@ -1118,7 +1150,7 @@ def refine_sustain_by_regime(
     info["flux_edge_ratio_start"] = float(np.median(smoothed[:n_edge]) / denom)
     info["flux_edge_ratio_end"] = float(np.median(smoothed[-n_edge:]) / denom)
 
-    threshold = float(cfg.regime_flux_ratio) * denom
+    threshold = float(info["flux_ratio_applied"]) * denom
     flux_start_i, flux_end_i = _walk_inward(smoothed, times_s, lambda v, _i: v > threshold)
     if flux_start_i >= n:
         flux_att, flux_dec = t_att_rel, t_dec_rel
@@ -1130,14 +1162,19 @@ def refine_sustain_by_regime(
 
     hi_att, hi_dec = t_att_rel, t_dec_rel
     hi_db, hi_times, hi_status = compute_half_integer_ratio_db(
-        y_trimmed, sr, f0_hz, cfg, n_fft=analysis_n_fft
+        y_trimmed, sr, f0_hz, cfg, n_fft=hi_n_fft
     )
     info["half_integer_valid"] = bool(hi_status.get("half_integer_valid"))
     info["half_integer_bandwidth_hz"] = hi_status.get("half_integer_bandwidth_hz")
-    info["half_integer_reason"] = hi_status.get("reason")
-    if not info["half_integer_valid"]:
-        info["half_integer_valid"] = False
-        # reason is stored only when invalid
+    info["hi_n_fft"] = int(hi_status.get("n_fft") or hi_n_fft)
+    if info["half_integer_valid"]:
+        info["half_integer_invalid_reason"] = None
+        info["half_integer_reason"] = None
+    else:
+        reason = hi_status.get("reason") or "refused"
+        if reason not in ("band_below_resolution", "no_f0", "refused"):
+            reason = "refused"
+        _set_hi_invalid(reason)
     hi_mask = (hi_times >= t_att_rel) & (hi_times <= t_dec_rel)
     hi_s = np.asarray(hi_db[hi_mask], dtype=np.float64)
     if hi_s.size and cfg.regime_half_integer:
@@ -1213,7 +1250,7 @@ def refine_sustain_by_regime(
     info["trimmed_start_s"] = max(0.0, cand_att - t_att_rel)
     info["trimmed_end_s"] = max(0.0, t_dec_rel - cand_dec)
 
-    if cand_span < floor_s:
+    if span < floor_s or cand_span < floor_s:
         info["refused"] = True
         info["refused_reason"] = "span_below_floor"
         return t_att_rel, t_dec_rel, info
@@ -1239,13 +1276,14 @@ def build_regime_flux_sidecar(
     i1 = min(len(y), max(i0 + 1, int(round(float(t_end) * sr))))
     y_s = y[i0:i1]
     analysis_n_fft, _ = resolve_analysis_n_fft(cfg, pitch_frame_length)
+    hi_n_fft = resolve_hi_n_fft(cfg, pitch_frame_length)
     flux, times = compute_spectral_flux(
         y_s, sr, frame_length=cfg.frame_length, hop_length=cfg.hop_length, normalised=True
     )
-    hi_status: Dict = {"half_integer_valid": False, "half_integer_bandwidth_hz": None}
+    hi_status: Dict = {"half_integer_valid": False, "half_integer_bandwidth_hz": None, "n_fft": hi_n_fft}
     if cfg.regime_half_integer:
         hi_db, hi_times, hi_status = compute_half_integer_ratio_db(
-            y_s, sr, f0_hz, cfg, n_fft=analysis_n_fft
+            y_s, sr, f0_hz, cfg, n_fft=hi_n_fft
         )
         n = min(len(flux), len(hi_db), len(times), len(hi_times))
         flux, times, hi_db = flux[:n], times[:n], hi_db[:n]
@@ -1273,6 +1311,7 @@ def build_regime_flux_sidecar(
         "flux_normalised": True,
         "half_integer_valid": bool(hi_status.get("half_integer_valid")),
         "hi_bandwidth_hz": hi_status.get("half_integer_bandwidth_hz"),
+        "hi_n_fft": int(hi_status.get("n_fft") or hi_n_fft),
         "f0_hz": None if f0_hz is None else float(f0_hz),
         "pitch_frame_length": None if pitch_frame_length is None else int(pitch_frame_length),
         "flux_smoothed": [float(v) for v in flux_sm],

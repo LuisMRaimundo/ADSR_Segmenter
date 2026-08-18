@@ -229,8 +229,64 @@ def test_sidecar_has_new_keys(sr):
     assert "hi_bandwidth_hz" in payload
     assert payload["f0_hz"] == 440.0
     assert payload["pitch_frame_length"] == 2048
+    assert payload["hi_n_fft"] == 2048
     assert len(payload["flux_smoothed"]) == len(payload["flux"])
     assert len(payload["half_integer_ratio_db_smoothed"]) == len(payload["flux"])
+
+
+def test_floor_refuses_trim_but_fills_diagnostics(sr):
+    # 82 Hz, ~1.2 s sustain: 8 × 4096 / 22050 ≈ 1.49 s floor.
+    y = _adsr_tone(sr, 82.41, att=0.06, sus=1.15, dec=0.12, gap=0.05)
+    y_trim, _ = core.trim_active_region(y, sr)
+    cfg = core.SegmentConfig(
+        regime_refine_mode="trim",
+        regime_min_windows=8,
+        regime_min_duration=1.0,
+    )
+    t_att, t_dec = 0.08, 1.18
+    new_att, new_dec, info = core.refine_sustain_by_regime(
+        y_trim, sr, t_att, t_dec, cfg, 82.41, pitch_frame_length=4096
+    )
+    assert info["refused"] is True
+    assert info["refused_reason"] == "span_below_floor"
+    assert new_att == t_att and new_dec == t_dec
+    assert info["flux_reference"] is not None
+    assert info["flux_edge_ratio_start"] is not None
+    assert info["flux_edge_ratio_end"] is not None
+    assert info["window_start"] is not None
+    assert info["window_end"] is not None
+    assert info["hi_reference_db"] is not None
+    assert info["hi_edge_rise_db_start"] is not None
+    assert info["hi_edge_rise_db_end"] is not None
+
+
+def test_low_register_hi_uses_pitch_frame(sr):
+    y = _harmonics(sr, 82.0, 1.4)
+    cfg = core.SegmentConfig()
+    _a, _d, info = core.refine_sustain_by_regime(y, sr, 0.05, 1.30, cfg, 82.0)
+    assert info["hi_n_fft"] >= 4096
+    assert info["half_integer_valid"] is True
+    assert info["half_integer_invalid_reason"] is None
+
+
+def test_normalised_threshold_hook(sr):
+    y = _adsr_tone(sr, 440.0, att=0.08, sus=2.0, dec=0.2)
+    y_trim, _ = core.trim_active_region(y, sr)
+    cfg = core.SegmentConfig(regime_refine_mode="trim", regime_min_duration=0.5, regime_min_windows=4)
+    _a0, _d0, norm = core.refine_sustain_by_regime(
+        y_trim, sr, 0.10, 2.05, cfg, 440.0, flux_normalised=True
+    )
+    _a1, _d1, raw = core.refine_sustain_by_regime(
+        y_trim, sr, 0.10, 2.05, cfg, 440.0, flux_normalised=False
+    )
+    assert norm["flux_normalised"] is True
+    assert raw["flux_normalised"] is False
+    assert norm["flux_ratio_applied"] == pytest.approx(1.5)
+    assert raw["flux_ratio_applied"] == pytest.approx(2.0)
+    assert norm["flux_ratio_applied"] != raw["flux_ratio_applied"]
+    assert norm["trimmed_start_s"] < 0.08 and norm["trimmed_end_s"] < 0.08
+    assert raw["trimmed_start_s"] < 0.08 and raw["trimmed_end_s"] < 0.08
+    assert abs(_a0 - 0.10) < 0.08 and abs(_a1 - 0.10) < 0.08
 
 
 @pytest.mark.skipif(not IOWA_FIXTURE.exists(), reason="IOWA trombone fixture not present")
