@@ -37,7 +37,7 @@ DEFAULT_REGIME_HI_REL_BANDWIDTH = 0.15
 DEFAULT_REGIME_HI_RISE_DB = 10.0
 DEFAULT_REGIME_MIN_WINDOWS = 8
 DEFAULT_REGIME_FLUX_RATIO_NORMALISED = 1.5
-DEFAULT_HI_N_FFT_FLOOR = 4096
+DEFAULT_HI_N_FFT_CAP = 16384
 NOTE_WRAP_SPELLINGS = {("B", "#"), ("C", "b"), ("E", "#"), ("F", "b")}
 
 SUPPORTED_AUDIO_EXTENSIONS = {
@@ -914,11 +914,37 @@ def resolve_analysis_n_fft(
     return int(cfg.frame_length), "frame_length"
 
 
-def resolve_hi_n_fft(cfg: SegmentConfig, pitch_frame_length: Optional[int] = None) -> int:
-    """STFT size for the half-integer track: pitch frame, else max(frame_length, 4096)."""
+def resolve_hi_n_fft(
+    sr: int,
+    f0_hz: float,
+    cfg: SegmentConfig,
+    pitch_frame_length: Optional[int] = None,
+    sustain_samples: Optional[int] = None,
+) -> Tuple[int, str]:
+    """Smallest power-of-two n_fft that resolves ±α·f0, then clamp.
+
+    Need ``2·sr/n_fft <= α·f0`` i.e. ``n_fft >= 2·sr/(α·f0)``. Then clamp to
+    ``[pitch_frame_length, 16384]`` and to ``<= sustain_samples/4``.
+    """
+    alpha = max(float(cfg.regime_hi_rel_bandwidth), 1e-9)
+    need = 2.0 * float(sr) / (alpha * float(f0_hz))
+    n = next_pow2(need)
+    source = "resolution"
     if pitch_frame_length is not None and int(pitch_frame_length) > 0:
-        return int(pitch_frame_length)
-    return max(int(cfg.frame_length), DEFAULT_HI_N_FFT_FLOOR)
+        lo = int(pitch_frame_length)
+        if n < lo:
+            n = lo
+            source = "pitch_frame"
+    if n > DEFAULT_HI_N_FFT_CAP:
+        n = DEFAULT_HI_N_FFT_CAP
+        source = "cap"
+    if sustain_samples is not None and int(sustain_samples) > 0:
+        max_n = max(64, int(sustain_samples) // 4)
+        if n > max_n:
+            n = 1 << int(np.floor(np.log2(max_n)))
+            n = max(64, n)
+            source = "sustain"
+    return int(n), source
 
 
 def compute_half_integer_ratio_db(
@@ -927,14 +953,25 @@ def compute_half_integer_ratio_db(
     f0_hz: Optional[float],
     cfg: SegmentConfig,
     n_fft: Optional[int] = None,
+    pitch_frame_length: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """Per-frame 1.5·f0 + 2.5·f0 energy vs f0, in dB, with bands ±α·f0.
 
-    Returns (ratio_db, times, status). NaN where unresolvable or f0 is missing.
+    When ``n_fft`` is omitted, chooses the smallest power of two that resolves
+    the relative band (see ``resolve_hi_n_fft``). Returns (ratio_db, times, status).
     """
-    n_fft = int(cfg.frame_length if n_fft is None else n_fft)
     hop = int(cfg.hop_length)
     alpha = float(cfg.regime_hi_rel_bandwidth)
+    source = "config"
+    if n_fft is not None:
+        n_fft = int(n_fft)
+    elif f0_hz is None or not np.isfinite(f0_hz) or float(f0_hz) <= 0:
+        n_fft = int(pitch_frame_length or cfg.frame_length)
+        source = "no_f0"
+    else:
+        n_fft, source = resolve_hi_n_fft(
+            sr, float(f0_hz), cfg, pitch_frame_length, sustain_samples=len(y)
+        )
     stft = librosa.stft(y, n_fft=n_fft, hop_length=hop)
     magnitude = np.abs(stft)
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
@@ -945,6 +982,8 @@ def compute_half_integer_ratio_db(
         "reason": None,
         "half_integer_bandwidth_hz": None,
         "n_fft": n_fft,
+        "hi_n_fft": n_fft,
+        "hi_n_fft_source": source,
     }
     nan = np.full(n_frames, np.nan, dtype=np.float64)
     if f0_hz is None or not np.isfinite(f0_hz) or float(f0_hz) <= 0:
@@ -1010,6 +1049,7 @@ def _regime_info_template(cfg: SegmentConfig) -> Dict:
         "half_integer_invalid_reason": None,
         "half_integer_bandwidth_hz": None,
         "hi_n_fft": None,
+        "hi_n_fft_source": None,
         "hi_reference_db": None,
         "flux_normalised": None,
         "flux_ratio_applied": None,
@@ -1082,10 +1122,8 @@ def refine_sustain_by_regime(
     """
     info = _regime_info_template(cfg)
     analysis_n_fft, nfft_src = resolve_analysis_n_fft(cfg, pitch_frame_length)
-    hi_n_fft = resolve_hi_n_fft(cfg, pitch_frame_length)
     info["analysis_n_fft"] = int(analysis_n_fft)
     info["analysis_n_fft_source"] = nfft_src
-    info["hi_n_fft"] = int(hi_n_fft)
     info["flux_normalised"] = bool(flux_normalised)
     info["flux_ratio_applied"] = float(
         cfg.regime_flux_ratio_normalised if flux_normalised else cfg.regime_flux_ratio
@@ -1162,11 +1200,12 @@ def refine_sustain_by_regime(
 
     hi_att, hi_dec = t_att_rel, t_dec_rel
     hi_db, hi_times, hi_status = compute_half_integer_ratio_db(
-        y_trimmed, sr, f0_hz, cfg, n_fft=hi_n_fft
+        y_trimmed, sr, f0_hz, cfg, pitch_frame_length=pitch_frame_length
     )
     info["half_integer_valid"] = bool(hi_status.get("half_integer_valid"))
     info["half_integer_bandwidth_hz"] = hi_status.get("half_integer_bandwidth_hz")
-    info["hi_n_fft"] = int(hi_status.get("n_fft") or hi_n_fft)
+    info["hi_n_fft"] = int(hi_status.get("hi_n_fft") or hi_status.get("n_fft") or 0)
+    info["hi_n_fft_source"] = hi_status.get("hi_n_fft_source")
     if info["half_integer_valid"]:
         info["half_integer_invalid_reason"] = None
         info["half_integer_reason"] = None
@@ -1276,14 +1315,19 @@ def build_regime_flux_sidecar(
     i1 = min(len(y), max(i0 + 1, int(round(float(t_end) * sr))))
     y_s = y[i0:i1]
     analysis_n_fft, _ = resolve_analysis_n_fft(cfg, pitch_frame_length)
-    hi_n_fft = resolve_hi_n_fft(cfg, pitch_frame_length)
     flux, times = compute_spectral_flux(
         y_s, sr, frame_length=cfg.frame_length, hop_length=cfg.hop_length, normalised=True
     )
-    hi_status: Dict = {"half_integer_valid": False, "half_integer_bandwidth_hz": None, "n_fft": hi_n_fft}
+    hi_status: Dict = {
+        "half_integer_valid": False,
+        "half_integer_bandwidth_hz": None,
+        "n_fft": None,
+        "hi_n_fft": None,
+        "hi_n_fft_source": None,
+    }
     if cfg.regime_half_integer:
         hi_db, hi_times, hi_status = compute_half_integer_ratio_db(
-            y_s, sr, f0_hz, cfg, n_fft=hi_n_fft
+            y_s, sr, f0_hz, cfg, pitch_frame_length=pitch_frame_length
         )
         n = min(len(flux), len(hi_db), len(times), len(hi_times))
         flux, times, hi_db = flux[:n], times[:n], hi_db[:n]
@@ -1311,7 +1355,8 @@ def build_regime_flux_sidecar(
         "flux_normalised": True,
         "half_integer_valid": bool(hi_status.get("half_integer_valid")),
         "hi_bandwidth_hz": hi_status.get("half_integer_bandwidth_hz"),
-        "hi_n_fft": int(hi_status.get("n_fft") or hi_n_fft),
+        "hi_n_fft": None if hi_status.get("hi_n_fft") is None else int(hi_status["hi_n_fft"]),
+        "hi_n_fft_source": hi_status.get("hi_n_fft_source"),
         "f0_hz": None if f0_hz is None else float(f0_hz),
         "pitch_frame_length": None if pitch_frame_length is None else int(pitch_frame_length),
         "flux_smoothed": [float(v) for v in flux_sm],
