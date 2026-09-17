@@ -26,17 +26,21 @@ First run downloads a private Python and libraries (~150–250 MB), then opens t
 
 **Windows:** double-click **`run.bat`** in the project folder (runs `split_audio_segments.py`).
 
+Requires **Python ≥ 3.10**. From the repository root:
+
 ```bash
 pip install -e ".[dev]"
 python split_audio_segments.py          # GUI
-python split_audio_cli.py -f ./samples  # headless batch
+python split_audio_cli.py -f ./samples -o ./adsr_out --export-metadata
 python run_benchmark.py --generate-corpus && python run_benchmark.py
 pytest
 ```
 
 Entry points after install: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-segmenter-benchmark`.
 
-**MP3/M4A:** install [ffmpeg](https://ffmpeg.org/) on your PATH.
+`run.bat` (Windows) prefers `py -3`, then `python`, and launches `split_audio_segments.py` from the folder that contains the batch file. The current working directory is not used to find the script.
+
+**MP3/M4A:** install [ffmpeg](https://ffmpeg.org/) on your PATH. Compressed formats are optional; `.wav` is the recommended scientific input.
 
 ---
 
@@ -53,7 +57,11 @@ Entry points after install: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-se
 
 Detection modes: **smart** (energy + proportional anchors, default), **advanced** (spectral flux + derivatives), **proportional**. Pitch refinement: **expand** (default), **annotate** (full sustain for STFT + metadata), **crop** (tight stable window). Spectral-regime refinement: **annotate** (default, metadata only), **trim** (also writes `_Sustains_Stable/`), or **off**. Regime flux is level-normalised; half-integer bands are relative to \(f_0\). Optional `--flux-sidecar` writes `<stem>.flux.json` on the sustain frame grid.
 
-These four folder names are **operational energy/pitch regions**, not uniquely determined physical ADSR instants. The detector always emits attack / sustain / decay / release intervals (clamped to minimum durations) even when a recording has no synthesizer-style sustain. Metadata `decay_start` / \(t_{\mathrm{dec}}\) is an energy-threshold offset after the peak, not synthesizer decay-to-sustain. Digital silence is rejected per file (`no_active_energy`); other files in the same batch still complete. The GUI writes beside the source folder; CLI `--output` selects another directory. See [docs/ADSR_Segmenter_math_formula.md](docs/ADSR_Segmenter_math_formula.md).
+These four folder names are **operational energy/pitch regions**, not uniquely determined physical ADSR instants. The detector always emits attack / sustain / decay / release intervals (clamped to minimum durations) even when a recording has no synthesizer-style sustain. Metadata `decay_start` / \(t_{\mathrm{dec}}\) is an energy-threshold offset after the peak, not synthesizer decay-to-sustain. Digital silence is rejected per file (`no_active_energy`); other files in the same batch still complete. The GUI writes beside the source folder; CLI `--output` selects another directory.
+
+**Load:** `librosa.load(path, sr=None)` keeps the file’s sample rate. The library default `mono=True` is not overridden, so stereo is downmixed. Filename note tokens must not be preceded by a letter (`Violin_A4` and `B#4` match; `Bagpipe1` / `seg1` do not).
+
+**CLI exit codes:** `0` all files succeeded; `1` folder missing or no audio files; `2` at least one file rejected or failed. See [docs/ADSR_Segmenter_math_formula.md](docs/ADSR_Segmenter_math_formula.md).
 
 ---
 
@@ -96,7 +104,16 @@ pytest
 
 GitHub Actions runs `pytest` on push (see `.github/workflows/ci.yml`). Iowa trombone AIFF fixtures under `tests/fixtures/` are optional; those tests skip when the file is absent.
 
-Declared dependencies are `librosa>=0.10.0` and the rest of `requirements.txt` / `pyproject.toml`. A reused developer venv with `include-system-site-packages = true` was observed at Python 3.10.11 + librosa 0.10.2.post1. A sibling isolated venv (`include-system-site-packages = false`) installed the same declared pins and resolved librosa 0.11.0. Do not treat either as a published lockfile.
+Declared dependencies are `librosa>=0.10.0` and the rest of `requirements.txt` / `pyproject.toml`. There is **no published lockfile**. A developer virtual environment that reuses system-site packages is **not** a fully isolated install.
+
+**Validation evidence recorded for the merged implementation `8cfce8d` (2026-09-17), not re-run in this documentation pass:**
+
+- Reused venv (`include-system-site-packages = true`): Python 3.10.11, librosa 0.10.2.post1 — 53 passed, 2 skipped (Iowa AIFF absent).
+- Isolated venv (`include-system-site-packages = false`): Python 3.10.11, librosa 0.11.0 — same declared pins; YIN may report `tracking_failed` instead of `unvoiced` on noise.
+- GitHub Actions `pytest` on Python 3.10 and 3.11 for PR #5.
+- Synthetic GUI Run-button check and CLI mixed/all-silent batches (external fixtures). The research corpus and in-repository benchmark were not re-run.
+
+This documentation update verified CLI `--help` / benchmark `--help` and source excerpts against that baseline. It does not claim a new full-suite or corpus run.
 
 ---
 

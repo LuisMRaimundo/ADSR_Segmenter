@@ -3,24 +3,32 @@
 **Document type:** formula catalogue for the production detector  
 **Language:** English  
 **Rendering:** Markdown + LaTeX (`$...$` inline, `$$...$$` display). No custom macros.  
-**Project version:** 3.3.2 plus unreleased validation, parser, silence, and documentation fixes  
+**Project version:** 3.3.2 plus unreleased documentation (implementation already on GitHub `main`)  
 **Do not treat this file as a uniqueness proof.** Operational boundaries are heuristics.
 
 ---
 
-## 0. Provenance and working-tree status
+## 0. Provenance and coverage
 
 | Item | Value |
 |------|--------|
-| Repository | `E:\PYTHON CODES\Pacore de preparação dos sons\ADSR_Segmenter` |
-| GitHub alignment SHA | `8ad432f0e2da366dba045732f6cf581e7a4bbfa9` |
-| Branch | `fix/adsr-validation-and-documentation` (local only; not pushed) |
-| Documented HEAD | `8ad432f` plus the files hashed in §0.1 (this refresh) |
-| Generated | 2026-09-17 |
+| Implementation baseline | `8cfce8d01c239b8359a2310d3b0632f2cfb9ead9` (GitHub `main`, merge of PR #5) |
+| Documentation audit | 2026-09-17 |
+| This document’s own commit | *not recorded here* (external completion report) |
+| Source hashes | §0.1 — first-party Python at the baseline (unchanged by this documentation branch) |
 
-GitHub `origin/main` at generation time is `8ad432f`. This file describes the reviewed working tree immediately before the fix-branch commit.
+The baseline tree is the released detector, CLI, and GUI. Unpublished local `--workers` commit `633fb37` is **out of scope** and is not described.
 
-### 0.1 SHA-256 of documented first-party Python (refreshed 2026-09-17)
+### 0.0 How to read a claim
+
+| Tag | Meaning |
+|-----|---------|
+| **Code-established** | Directly implemented; excerpt and formula match the function |
+| **Engineering heuristic** | Tuned default or clamp; not a physical uniqueness result |
+| **Literature-supported reading** | Musicological/DSP interpretation of an operational cut |
+| **Limitation** | Undefined, skipped, version-dependent, or not implemented |
+
+### 0.1 SHA-256 of documented first-party Python (baseline `8cfce8d`)
 
 | File | Lines | SHA-256 |
 |------|------:|---------|
@@ -44,9 +52,9 @@ GitHub `origin/main` at generation time is `8ad432f`. This file describes the re
 
 | File | Role | Mathematics coverage |
 |------|------|----------------------|
-| `audio_segment_core.py` | Production DSP | Full (M-001…M-038, L-001…L-010) |
-| `split_audio_cli.py` | Production CLI | Orchestration only; calls core |
-| `split_audio_segments.py` | Production GUI | Same core detector; fade/export wrappers; no independent detector math |
+| `audio_segment_core.py` | Production DSP | Full (M-001…M-038, M-015b, M-015c, M-042, L-001…L-010) |
+| `split_audio_cli.py` | Production CLI | Orchestration; exit codes; metadata wrappers |
+| `split_audio_segments.py` | Production GUI | Same core detector; UI-thread snapshot; no independent detector math |
 | `run_benchmark.py` | Optional benchmark driver | No original DSP; writes default `benchmark/results/` if invoked that way |
 | `benchmark/benchmark_core.py` | Optional benchmark | M-039 error metrics |
 | `benchmark/generate_corpus.py` | Optional / test corpus | M-040, M-041 synthetic envelopes |
@@ -78,7 +86,7 @@ Operational outputs (absolute file seconds):
 | $t_{\mathrm{end}}$ | `t_end` / `trim.t_end` | End of the active (trimmed) region |
 | release | $t > t_{\mathrm{end}}$ | Residual samples after the trim |
 
-The detector **always constructs** $t_{\mathrm{att}} < t_{\mathrm{dec}} < t_{\mathrm{end}}$ when it can, using minimum-duration clamps. A recording without a plateau still receives a sustain interval.
+The detector **always constructs** $t_{\mathrm{att}} < t_{\mathrm{dec}} < t_{\mathrm{end}}$ when it can, using minimum-duration clamps. A recording without a plateau still receives a sustain interval (**engineering heuristic** / **code-established** clamp). Do not read these cuts as uniquely determined physical ADSR transitions (**limitation**). Digital silence is not a valid export (**code-established**, M-015b).
 
 ---
 
@@ -111,6 +119,7 @@ SMART_PROP_BLEND = 0.3
 
 ```python
 def preprocess_signal(y: np.ndarray, remove_dc: bool = True) -> np.ndarray:
+    """Optional DC removal before envelope analysis."""
     if not remove_dc or len(y) == 0:
         return y
     return y - float(np.mean(y))
@@ -255,7 +264,11 @@ $$
 ```python
     win = max(3, win | 1)
     half = win // 2
-    out[i] = float(np.median(arr[lo:hi]))
+    out = np.empty_like(arr, dtype=np.float64)
+    for i in range(len(arr)):
+        lo, hi = max(0, i - half), min(len(arr), i + half + 1)
+        out[i] = float(np.median(arr[lo:hi]))
+    return out
 ```
 
 4. **Formula:** Force odd width $W=\max(3,\, w\text{ OR }1)$. Then
@@ -306,9 +319,11 @@ $$
     if peak_val < 1e-12:
         return float(times[0])
     level = threshold * peak_val
+    search_end = max(1, peak_idx + 1)
     for i in range(search_end):
         if rms[i] >= level:
             return float(times[i])
+    return float(times[min(peak_idx, len(times) - 1)])
 ```
 
 4. **Formula:** Let $k^\star=\arg\max_k r[k]$ (`peak_idx` from caller). Search $k=0,\ldots,k^\star$:
@@ -446,29 +461,68 @@ d=\max(d_{\mathrm{cfg}},\, T_{\mathrm{pitch}},\, d_{\mathrm{frames}})
 $$
 
 If $0<L<d$, then $d\leftarrow\max(0.25L,\, d_{\mathrm{frames}},\, 0.02)$.
-3. **Defaults:** $N_{\mathrm{min,frames}}=40$, $H=512$, $T_{\mathrm{pitch}}=0.5\,\mathrm{s}$. At $22\,050\,\mathrm{Hz}$, $d_{\mathrm{frames}}\approx 0.929\,\mathrm{s}$, which **dominates** the Medium $0.35\,\mathrm{s}$ preset.
-4. **Layman:** Demand a sustain at least 40 hops long, unless the file is shorter than that demand.
-5. **Specialist:** The 40-hop term is a **preferred minimum that is clamped**, not a reject-the-file gate. The short-file branch cannot go below $d_{\mathrm{frames}}$, so at $f_s\le 22\,050\,\mathrm{Hz}$ it does not relax that grain. Detector numbers were not changed.
-6. **Tests:** short-sound test still expects $\ge 0.02\,\mathrm{s}$ sustain.
+3. **Excerpt:**
+
+```python
+    min_by_frames = (cfg.min_sustain_frames * cfg.hop_length) / max(float(sr), 1.0)
+    min_required = max(cfg.min_sustain_duration, cfg.pitch_window_duration, min_by_frames)
+    if active_len is not None and 0 < active_len < min_required:
+        # Preferred minimum is reduced toward 25% of L, but never below the
+        # 40-hop analysis grain. This is a clamp floor, not a reject-the-file rule.
+        min_required = max(active_len * 0.25, min_by_frames, 0.02)
+    return min_required
+```
+
+4. **Defaults:** $N_{\mathrm{min,frames}}=40$, $H=512$, $T_{\mathrm{pitch}}=0.5\,\mathrm{s}$. At $22\,050\,\mathrm{Hz}$, $d_{\mathrm{frames}}\approx 0.929\,\mathrm{s}$, which **dominates** the Medium $0.35\,\mathrm{s}$ preset.
+5. **Layman:** Prefer a sustain at least 40 hops long; if the file is shorter, still emit ordered cuts.
+6. **Specialist:** **Code-established** preferred minimum (**engineering heuristic**). Not an eligibility reject. The short-file branch cannot go below $d_{\mathrm{frames}}$, so at $f_s\le 22\,050\,\mathrm{Hz}$ it does not relax that grain.
+7. **Tests:** `tests/test_silence_and_policy.py` (`test_short_file_boundaries_ordered`, `test_no_sustain_still_gets_operational_interval`).
 
 ---
 
 ## M-015b — Silence / export rejection
 
-1. **Site:** `describe_rejection`, lines 575–587.
-2. **Rule:** After the same DC removal as detection, if $\max|\tilde x|<10^{-8}$ or `trim.active_len` $\le 10^{-6}$, return `no_active_energy`. Else if M-032 fails, return `invalid_segment_boundaries`. Else accept.
-3. **Layman:** All-zero files are invalid scientific input even when clamps invent ordered times.
-4. **Downstream:** `process_audio_file` raises `ValueError`; CLI `batch_process_folder` records the error and continues; GUI `process_file` records `batch_failures` and continues. CLI exit `2` if any file fails.
-5. **Tests:** `tests/test_silence_and_policy.py`.
+1. **Site:** `describe_rejection`, lines 575–587. **Status:** production.
+2. **Excerpt:**
+
+```python
+    y_chk = preprocess_signal(y, True)
+    peak = float(np.max(np.abs(y_chk))) if len(y_chk) else 0.0
+    if peak < 1e-8 or result.trim.active_len <= 1e-6:
+        return REJECTION_NO_ACTIVE_ENERGY
+    if not validate_segments(result.t_att, result.t_dec, result.t_end):
+        return REJECTION_INVALID_BOUNDARIES
+    return None
+```
+
+3. **Rule:** After DC removal, if $\max|\tilde x|<10^{-8}$ or `trim.active_len` $\le 10^{-6}$, return `no_active_energy`. Else if M-032 fails, return `invalid_segment_boundaries`. Else accept.
+4. **Layman:** All-zero files are invalid scientific input even when clamps invent ordered times.
+5. **Specialist:** **Code-established** policy. Peak uses `remove_dc=True` regardless of `cfg.remove_dc` (**limitation** if a caller disables DC).
+6. **Downstream:** `process_audio_file` raises `ValueError`; CLI `batch_process_folder` records the error and continues; GUI `process_file` records `batch_failures` and continues. CLI exit `2` if any file fails; `0` only if every file succeeds; `1` if the folder is missing or empty of audio.
+7. **Tests:** `tests/test_silence_and_policy.py`.
 
 ---
 
 ## M-015c — Boundary-policy metadata
 
-1. **Site:** `_boundary_policy`, lines 590–607; attached on every `SegmentResult`.
-2. **Fields:** `decay_definition=energy_threshold_after_peak`; `min_sustain_s` (effective); `min_sustain_cfg_s`; `min_sustain_frames_s`; `active_len_s`; `sustain_assignment` (`detector` / `operational_clamp` / `operational_proportional` / `pitch_refined` / `fallback_proportional`); `frame_floor_limits_short_file`.
-3. **Layman:** Say whether the sustain was measured or assigned, and that “decay” means an energy offset.
-4. **Does not change detector numbers.**
+1. **Site:** `_boundary_policy`, lines 590–607; attached on every `SegmentResult`. **Status:** production metadata.
+2. **Excerpt:**
+
+```python
+    return {
+        "decay_definition": "energy_threshold_after_peak",
+        "min_sustain_s": float(min_sustain),
+        "min_sustain_cfg_s": float(cfg.min_sustain_duration),
+        "min_sustain_frames_s": float(min_frames_s),
+        "active_len_s": float(active_len),
+        "sustain_assignment": sustain_assignment,
+        "frame_floor_limits_short_file": bool(active_len > 0 and min_frames_s >= active_len),
+    }
+```
+
+3. **Fields:** as in the excerpt. `sustain_assignment` is `detector` / `operational_clamp` / `operational_proportional` / `pitch_refined` / `fallback_proportional`.
+4. **Layman:** Say whether the sustain was measured or assigned, and that “decay” means an energy offset.
+5. **Specialist:** **Code-established** labels. Does **not** change detector numbers. `decay_definition` is terminology for M-010 / smart blend, not a second detector.
 
 ---
 
@@ -834,6 +888,32 @@ $$
 
 ---
 
+## M-042 — Batch continuation
+
+1. **Name / status:** Per-file try/except around `process_audio_file`. Production orchestration, not a second detector.
+2. **Site:** `batch_process_folder`, lines 1850–1871.
+3. **Excerpt:**
+
+```python
+        try:
+            results.append(
+                process_audio_file(
+                    f_path, out, cfg, fade_ms, fade_type, write_flux_sidecar=write_flux_sidecar
+                )
+            )
+        except Exception as exc:
+            logger.error("Failed %s: %s", f_path.name, exc)
+            results.append({"file_path": str(f_path), "error": str(exc)})
+```
+
+4. **Formula:** none. Control flow only.
+5. **Layman:** One bad file must not stop the others.
+6. **Specialist:** **Code-established.** Unexpected exceptions are recorded as `error` strings (not only `no_active_energy`). The CLI does **not** swallow successes: exit `2` if `ok != len(results)`.
+7. **File discovery:** `list_audio_files` (lines 1750–1756) — non-recursive `iterdir`, suffix in `SUPPORTED_AUDIO_EXTENSIONS`, skip `*_backup` stems, sort by case-insensitive name.
+8. **Tests:** `tests/test_silence_and_policy.py`, `tests/test_advanced_features.py` batch I/O.
+
+---
+
 ## 3. GUI / CLI mathematics
 
 `split_audio_cli.py` and `split_audio_segments.py` do not implement a second detector. They call `detect_segments` / `extract_and_fade_segments` / `write_audio`.
@@ -856,15 +936,20 @@ GUI-only notes (not separate M-ids):
 - `effective_min_sustain_duration`’s short-file branch cannot undercut the 40-hop floor (M-015). Policy: clamp / assign, do not reject the file. Detector numbers unchanged.
 - Installer scripts contain no DSP mathematics.
 - Optional Iowa trombone AIFF under `tests/fixtures/` was **not** present; those tests were skipped.
-- This document describes the **current working tree**, not every historical export in the wild.
+- This catalogue describes implementation baseline `8cfce8d`, not every historical export in the wild.
+- Unpublished `--workers` / thread-pool CLI commit `633fb37` is omitted on purpose.
+- GUI `ImageGrab` screenshot of the live window was not obtained in the earlier validation pass; widget strings and exported files were.
+- `describe_rejection` always DC-removes even if `cfg.remove_dc` is false.
+- In-repository `benchmark/results/` lines were not regenerated for this documentation audit.
 
 ---
 
 ## 5. References actually consulted
 
-- Working tree modules listed in §0.1 (read in full for `audio_segment_core.py`; targeted reads for CLI, GUI, benchmark, tests, installers).
-- `README.md`, `docs/TECHNICAL_MANUAL.md` §§5–12, `docs/REGIME_REFINE_NOTES.md`, `CHANGELOG.md`, `pyproject.toml`, `requirements.txt`, `.github/workflows/ci.yml`.
-- librosa $0.10.2.post1$ in the reused sibling venv; librosa $0.11.0$ in the isolated sibling venv (declared `>=0.10.0`). Not librosa source.
-- Unit tests under `tests/` and synthetic checks written **outside** this repository.
+- First-party modules listed in §0.1 (full read of `audio_segment_core.py`; targeted reads of CLI, GUI, benchmark, tests, installers).
+- `README.md`, `QUICK_GUIDE.md`, `docs/TECHNICAL_MANUAL.md`, `docs/REGIME_REFINE_NOTES.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `pyproject.toml`, `requirements.txt`, `.github/workflows/ci.yml`.
+- CLI `split_audio_cli.py --help` and `run_benchmark.py --help` on the documentation branch (this task).
+- librosa $0.10.2.post1$ / $0.11.0$ version context from the 2026-09-17 validation report (not re-measured here). Not librosa source.
+- Prior completion report for PR #5 (external sibling folder). Unit tests under `tests/`.
 
-No external web service was used to render this file.
+No external web service was used to render this file. StackEdit rendering was **not** verified.

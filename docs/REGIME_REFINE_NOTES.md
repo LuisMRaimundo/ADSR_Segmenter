@@ -5,6 +5,11 @@ These defaults are the citable settings for the third sustain stage
 Energy export (`_Sustains/`) and the Advanced-mode attack detector are
 unchanged from v3.1 / v3.2.
 
+See [TECHNICAL_MANUAL.md](TECHNICAL_MANUAL.md) §8 and
+[ADSR_Segmenter_math_formula.md](ADSR_Segmenter_math_formula.md) M-024–M-028
+for the released implementation. This note does not redefine silence handling,
+filename-note parsing, or operational ADSR clamps.
+
 ## Defaults (v3.2, kept)
 
 | Parameter | Default | Why |

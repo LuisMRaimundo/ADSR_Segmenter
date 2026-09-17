@@ -11,6 +11,7 @@ Clarifications and parser/batch reporting. Detection thresholds, hop, window, an
 - Document operational versus conceptual ADSR regions; correct the fade-length formula and mono load behaviour.
 - Add `docs/ADSR_Segmenter_math_formula.md`.
 - Pitch-fail test on unvoiced noise accepts `unvoiced` or `tracking_failed` (librosa 0.10 vs 0.11 YIN diagnostic) and still requires energy boundaries to be kept.
+- Comprehensive documentation audit against released `main` `8cfce8d`: README, Quick Guide, Technical Manual, and `docs/ADSR_Segmenter_math_formula.md` (provenance, claim types, export names, CLI exit codes, validation scope). Production detector numbers unchanged. Historical analyses were not regenerated.
 
 ## 3.3.2 — 2026-08-18
 
