@@ -6,7 +6,7 @@ For users who want to split instrument one-shots without reading the full techni
 
 **Windows (Python already installed):** double-click **`run.bat`** in the project folder.
 
-**No Python on this PC:** use the one-click installer ([installers/README.md](../installers/README.md)).
+**No Python on this PC:** use the one-click installer ([installers/README.md](installers/README.md)).
 
 **Manual install (Python 3.10+):**
 
@@ -54,10 +54,20 @@ Spectral-regime refinement watches the spectrum after level and pitch have alrea
 | Staccato / Pluck | Short attacks, advanced detection |
 | soft_high_brass | Soft high brass; regime **trim** + 8 ¢ pitch window |
 
-## 6. Need help?
+## 6. CLI (write somewhere other than the source folder)
 
-See [docs/TECHNICAL_MANUAL.md](docs/TECHNICAL_MANUAL.md) §18 Troubleshooting and [docs/REGIME_REFINE_NOTES.md](docs/REGIME_REFINE_NOTES.md) for regime defaults.
+```bash
+python split_audio_cli.py -f ./samples -o ./adsr_out --export-metadata
+```
+
+Exit `0` if every file succeeds, `2` if any file is rejected (for example digital silence) or fails. Valid files in a mixed batch still export. An all-silent folder still writes metadata when `--export-metadata` is set.
+
+Short recordings still receive ordered operational attack / sustain / decay cuts. The 40-hop analysis floor is a preferred minimum that is clamped, not a reason to skip the file.
+
+## 7. Need help?
+
+See [docs/TECHNICAL_MANUAL.md](docs/TECHNICAL_MANUAL.md) §18 Troubleshooting, [docs/ADSR_Segmenter_math_formula.md](docs/ADSR_Segmenter_math_formula.md) for formulas, and [docs/REGIME_REFINE_NOTES.md](docs/REGIME_REFINE_NOTES.md) for regime defaults.
 
 ## Copyright
 
-Copyright © 2026 Luís Raimundo. Proprietary research material — see [# Copyright and Use Notice.md](../#%20Copyright%20and%20Use%20Notice.md).
+Copyright © 2026 Luís Raimundo. Proprietary research material — see [# Copyright and Use Notice.md](%23%20Copyright%20and%20Use%20Notice.md).

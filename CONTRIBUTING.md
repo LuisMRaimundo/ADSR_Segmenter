@@ -15,6 +15,7 @@ pytest
 - Do **not** commit `installers/runtime/`, `__pycache__`, `.pytest_cache`, or generated `benchmark/corpus/*.wav`.
 - Regenerate benchmark corpus locally if needed: `python run_benchmark.py --generate-corpus`.
 - New detection stages must default to metadata-only (`annotate`) so published benchmark lines stay comparable.
+- If DSP source changes, refresh `docs/ADSR_Segmenter_math_formula.md` (hashes, line numbers, verbatim excerpts). Do not invent a version tag for documentation-only edits.
 
 ## CI
 

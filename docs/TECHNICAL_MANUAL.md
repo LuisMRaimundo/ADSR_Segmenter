@@ -1,9 +1,11 @@
 # ADSR_Segmenter — Comprehensive Technical Manual
 
-**Version:** 3.3.2 (`adsr-segmenter`)  
+**Version:** 3.3.2 (`adsr-segmenter`) plus unreleased documentation  
+**Implementation baseline:** GitHub `main` `8cfce8d` (2026-09-17)  
 **Repository:** [github.com/LuisMRaimundo/ADSR_Segmenter](https://github.com/LuisMRaimundo/ADSR_Segmenter)  
 **Audience:** Musicologists, acousticians, sound designers, and software engineers  
-**Copyright:** © 2026 Luís Raimundo. Proprietary research software — see `# Copyright and Use Notice.md`.
+**Copyright:** © 2026 Luís Raimundo. Proprietary research software — see `# Copyright and Use Notice.md`.  
+**Formulas:** line-accurate catalogue in [ADSR_Segmenter_math_formula.md](ADSR_Segmenter_math_formula.md). This manual explains operation; that file is the implementation-faithful mathematics.
 
 ---
 
@@ -44,7 +46,7 @@ The **ADSR envelope** (Attack, Decay, Sustain, Release) is a canonical abstracti
 | **Decay** | Post-articulation energy fall | Bow lift, tongue release, damping |
 | **Release** | Residual tail | Room, string ring-out, silence |
 
-This tool **does not** perform source separation or polyphonic transcription. It assumes **one active event per file** (or quasi-monophonic material where a single dominant envelope is meaningful).
+This mapping is a **musicological reading aid**, not a uniqueness proof. The software emits **operational** energy/pitch intervals (see [§4](#4-acoustic-model-adsr-segmentation) and the [mathematical reference](ADSR_Segmenter_math_formula.md)). It does **not** perform source separation or polyphonic transcription. It assumes **one active event per file** (or quasi-monophonic material where a single dominant envelope is meaningful).
 
 ### 1.2 Acoustic / DSP perspective
 
@@ -73,6 +75,7 @@ Automatically splits monophonic or quasi-monophonic audio into classical envelop
 |---------------|---------|
 | `_Attacks/` | Onset → attack boundary |
 | `_Sustains/` | Attack boundary → decay boundary |
+| `_Sustains_Stable/` | Flux- and/or half-integer-stable sustain (regime **trim** only) |
 | `_Decays/` | Decay boundary → end of active sound |
 | `_Release_Silence/` | Tail after active energy (no fades) |
 | `_Full_Active_Sound/` | Full trimmed active region |
@@ -133,7 +136,7 @@ Amplitude
 |--------|---------|
 | \(t_{\mathrm{start}}\) | Start of active audio after trim |
 | \(t_{\mathrm{att}}\) | End of attack / start of sustain |
-| \(t_{\mathrm{dec}}\) | Start of decay / end of sustain |
+| \(t_{\mathrm{dec}}\) | Operational decay start: energy-threshold offset after the peak (not synthesizer decay-to-sustain) |
 | \(t_{\mathrm{end}}\) | End of musically active energy |
 | Release | \([t_{\mathrm{end}}, t_{\mathrm{EOF}}]\) |
 
@@ -177,7 +180,7 @@ else:                     → detect_segments_proportional()
 
 ### 6.1 Proportional mode
 
-Purely duration-based on active length \(L\). Normalized fractions \(\alpha, \sigma, \delta\) sum to 1. See [§11.4](#114-proportional-mode).
+Purely duration-based on active length \(L\). Normalized fractions \(\alpha, \sigma, \delta\) sum to 1. See [§11.5](#115-proportional-mode).
 
 **Use when:** homogeneous libraries needing deterministic, preset-driven splits.
 
@@ -319,18 +322,20 @@ Drag green (attack) and orange (decay) lines; arrow keys nudge 5 ms (Shift = 25 
 For input `Violin_A4.wav`:
 
 ```text
-source_folder/
-├── _Attacks/Violin_A4_Attack.wav
-├── _Sustains/Violin_A4_Sustain.wav
-├── _Sustains_Stable/Violin_A4_SustainStable.wav   # trim mode only
-├── _Decays/Violin_A4_Decay.wav
+output_or_source_folder/
+├── _Attacks/Violin_A4_Attacks.wav
+├── _Sustains/Violin_A4_Sustains.wav
+├── _Sustains_Stable/Violin_A4_SustainStable.wav   # regime trim only
+├── _Decays/Violin_A4_Decays.wav
 ├── _Release_Silence/Violin_A4_Release.wav
 ├── _Full_Active_Sound/Violin_A4_FullActive.wav
 ├── segmentation_metadata.json
 └── segmentation_metadata.csv
 ```
 
-JSON per-file keys include `segments.attack_end`, `decay_start`, `end`, `durations.*`, `pitch_stability`, `regime_refine`, and optional `regime_flux_sidecar`.
+Tags come from the folder name with leading/trailing `_` stripped (`_Attacks` → `Attacks`), except `_Release_Silence` → `Release` and `_Full_Active_Sound` → `FullActive`. The GUI writes beside the source folder. The CLI writes to `--output` when given, otherwise beside the source folder.
+
+JSON per-file keys include `segments.attack_end`, `decay_start`, `end`, `durations.*`, `pitch_stability`, `regime_refine`, `boundary_policy`, and optional `regime_flux_sidecar`. Rejected files appear as `{ "file_path", "error" }` (for example `Rejected silence.wav: no_active_energy`). Parameters record `decay_boundary_definition: energy_threshold_after_peak`.
 
 ---
 
@@ -972,10 +977,11 @@ parts, idx_att, idx_dec, idx_end = core.extract_and_fade_segments(
 | `extract_and_fade_segments(…)` | Slice + ZC + fade |
 | `find_zero_crossing(y, idx, sr, search_ms)` | Nearest ZC sample index |
 | `apply_fades(audio, sr, fade_ms, fade_type)` | Edge ramps |
-| `parse_note_hz_from_filename(path)` | Expected F0 from name |
+| `parse_note_hz_from_filename(path)` | Expected F0 from name (non-letter boundary) |
+| `describe_rejection(y, result)` | `no_active_energy` / `invalid_segment_boundaries` / `None` |
 | `SegmentConfig.from_preset(name, **overrides)` | Preset builder |
-| `process_audio_file(path, out_dir, cfg, …)` | Headless single-file pipeline |
-| `batch_process_folder(folder, cfg, …)` | Batch wrapper |
+| `process_audio_file(path, out_dir, cfg, …)` | Headless single-file pipeline; raises `ValueError` on rejection |
+| `batch_process_folder(folder, cfg, …)` | Per-file try/except; continues after failures |
 
 ### 12.3 Validation rules
 
@@ -987,15 +993,17 @@ parts, idx_att, idx_dec, idx_end = core.extract_and_fade_segments(
 
 ### 13.1 Launch
 
-**Windows:** double-click `run.bat` or:
+**Windows:** double-click `run.bat` (uses `py -3` if present, else `python`; script path is the folder that contains `run.bat`).
 
 ```bash
 pip install -e ".[dev]"
-python split_audio_segments.py          # GUI
-python split_audio_cli.py -f ./samples  # headless batch
+python split_audio_segments.py
+python split_audio_cli.py -f ./samples -o ./adsr_out --export-metadata
 ```
 
-Entry points: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-segmenter-benchmark`.
+CLI `--help` (verified against this baseline) lists the flags in the table below. Entry points: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-segmenter-benchmark`.
+
+**Exit codes:** `0` all succeeded; `1` missing folder or no audio files; `2` one or more files rejected or failed.
 
 ### 13.2 CLI flags
 
@@ -1026,10 +1034,12 @@ Entry points: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-segmenter-benchm
 
 1. **Source Folder** — select input directory
 2. **Preset Configuration** — duration class; **Auto-Detect Mean Length** or manual mean length; **Apply Preset**
-3. **Segmentation Parameters** — thresholds, fades, Smart/Advanced, pitch refine, regime refine (mode / flux ratio / n_fft / sidecar), optional thread pool
-4. **► RUN OPTIMIZED SPLIT** — batch process
-5. **Review Segmentation** — manual boundary adjustment
+3. **Segmentation Parameters** — thresholds, fades, Smart/Advanced, pitch refine, regime refine (mode / flux ratio / n_fft / sidecar). **Parallel batch** uses an in-process `ThreadPoolExecutor` (GUI-only). That is not the unpublished CLI `--workers` experiment, which is **not** on GitHub `main`.
+4. **► RUN OPTIMIZED SPLIT** — batch process. Widget values are copied on the UI thread before the worker starts.
+5. **Review Segmentation** — drag **attack** (green) and **Decay (energy offset)** (orange).
 6. **Clear** — reset UI state (does not delete outputs)
+
+There is **no** GUI output-folder control. Exports appear as sibling folders next to the source audio.
 
 ---
 
@@ -1049,8 +1059,8 @@ Entry points: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-segmenter-benchm
 
 2. **Prepare files**
 
-   - Place `.wav` files in one folder, e.g. `D:\Samples\Violin\`.
-   - Name with pitch hints: `Violin_A4_01.wav`, `Violin_G3_02.wav`.
+   - Place `.wav` files in one folder (for example `./samples/violin`).
+   - Name with pitch hints: `Violin_A4_01.wav`, `Violin_G3_02.wav`. The note token must not sit inside another word (`Bagpipe1` is not E1).
 
 3. **Start**
 
@@ -1092,7 +1102,8 @@ Entry points: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-segmenter-benchm
 
 ```bash
 python split_audio_cli.py \
-  --folder "D:/Samples/Violin_Legato" \
+  --folder ./samples/violin_legato \
+  --output ./adsr_out \
   --preset "Legato / Bow" \
   --pitch-refine-mode expand \
   --export-metadata
@@ -1108,7 +1119,8 @@ Expected behaviour: Smart mode, relaxed decay threshold (0.42), longer fades (55
 
 ```bash
 python split_audio_cli.py \
-  --folder "D:/Samples/Pizz" \
+  --folder ./samples/pizz \
+  --output ./adsr_out \
   --preset "Staccato / Pluck" \
   --fade-ms 25
 ```
@@ -1123,7 +1135,8 @@ Advanced mode activates automatically via preset (derivative + flux attack).
 
 ```bash
 python split_audio_cli.py \
-  --folder "D:/Analysis/LongBows" \
+  --folder ./samples/long_bows \
+  --output ./adsr_out \
   --preset "Very Long (> 6.0s)" \
   --pitch-refine-mode annotate \
   --export-metadata
@@ -1231,7 +1244,8 @@ Metrics: MAE for \(t_{\mathrm{att}}\), \(t_{\mathrm{dec}}\), \(t_{\mathrm{end}}\
 | `test_advanced_features.py` | Vibrato robust, Hann vs cosine, long-note guard, annotate, batch I/O |
 | `test_benchmark.py` | Corpus generation, MAE aggregation, template |
 | `test_regime_refine.py` | Steady tone, half-integer onset, floor refusal, annotate, sidecar |
-| `test_regime_generalise.py` | Relative HI bands, dual walk, vibrato, level, pitch failure, unvoiced, floor scaling |
+| `test_regime_generalise.py` | Relative HI bands, dual walk, vibrato, level, pitch failure, unvoiced/`tracking_failed`, floor scaling |
+| `test_silence_and_policy.py` | Digital silence rejection, mixed/all-silent CLI, short-file order, GUI snapshot |
 
 Key regression: 6 s note sustain ≥ 2.8 s; annotate mode preserves energy boundaries.
 
@@ -1250,6 +1264,11 @@ Key regression: 6 s note sustain ≥ 2.8 s; annotate mode preserves energy bound
 | `half_integer_valid` is false | No f₀, or a clamp left \(N_{\mathrm{HI}}\) too small | Flux walk still runs; check `hi_n_fft_source` (`cap` / `sustain`) |
 | `pitch_refine.failed` / `unvoiced` | Tracker lost the note or the take is unpitched | Energy boundaries kept; regime uses flux only |
 | `note_name_mismatch` | Filename spelling disagrees with tracked f₀ | Check wrap spellings (`B#4` = C5) and file naming |
+| `Rejected … no_active_energy` | Digital silence or empty trim | Expected; other files in the batch still run. CLI exit `2` if any file fails |
+| Mixed batch “partial success” | One invalid file among valids | Inspect `segmentation_metadata.json` `error` rows; valid stems still have folders |
+| All-silent folder, no WAV stems | Every file rejected | Metadata is still written if `--export-metadata`; no `_Attacks/` contents |
+| Very short file, long “sustain” | 40-hop clamp / operational assignment | Not a physical plateau; see `boundary_policy` |
+| GUI wrote next to the source | No output-folder widget | Use CLI `--output` for an external directory |
 | All segments similar length | Proportional-only | Enable Smart Mode |
 | MP3 slow/fails | Codec | Convert to WAV for batch jobs |
 
@@ -1266,6 +1285,8 @@ Key regression: 6 s note sustain ≥ 2.8 s; annotate mode preserves energy bound
 | `pytest` | ≥ 7.0 | Unit tests (dev) |
 
 Python ≥ 3.10. Standard library: `tkinter`, `threading`, `json`, `csv`, `pathlib`, `logging`, `concurrent.futures`.
+
+There is no published lockfile. Reusing system-site packages is not a fully isolated environment. A 2026-09-17 check of the merged tree observed librosa 0.10.2.post1 (system-site venv) and librosa 0.11.0 (isolated venv) from the same `librosa>=0.10.0` pin. Iowa AIFF tests skip when `tests/fixtures/` has no file. Historical research recordings and in-repo benchmark result files were not regenerated for this documentation update.
 
 ---
 
@@ -1289,4 +1310,4 @@ DEFAULT_REGIME_HI_RISE_DB = 10.0
 
 ---
 
-*Document for ADSR_Segmenter v3.3.2. Synchronized with `audio_segment_core.py`, `ALL_PRESETS`, and `SegmentConfig`. Last updated: August 2026.*
+*Document for ADSR_Segmenter v3.3.2 plus unreleased documentation. Implementation baseline `8cfce8d`. Synchronized with `audio_segment_core.py`, `ALL_PRESETS`, and `SegmentConfig`. Last documentation audit: 2026-09-17.*
