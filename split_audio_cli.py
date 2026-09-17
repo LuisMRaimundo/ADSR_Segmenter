@@ -79,6 +79,7 @@ def export_metadata(folder: Path, results: List[Dict[str, Any]], cfg: core.Segme
             "vibrato_robust": cfg.vibrato_robust,
             "fade_ms": fade_ms,
             "fade_type": fade_type,
+            "decay_boundary_definition": "energy_threshold_after_peak",
         },
         "files": [],
     }
@@ -103,6 +104,7 @@ def export_metadata(folder: Path, results: List[Dict[str, Any]], cfg: core.Segme
                     },
                     "pitch_stability": info.get("pitch_refine", {}),
                     "regime_refine": info.get("regime_refine", {}),
+                    "boundary_policy": info.get("boundary_policy", {}),
                     "regime_flux_sidecar": info.get("regime_flux_sidecar"),
                 },
             }
@@ -224,6 +226,7 @@ def main(argv: List[str] | None = None) -> int:
             )
 
     if args.export_metadata:
+        out_dir.mkdir(parents=True, exist_ok=True)
         export_metadata(out_dir, results, cfg, fade_ms, args.fade_type)
 
     return 0 if ok == len(results) else 2

@@ -298,6 +298,7 @@ class SegmentResult:
     trim: TrimInfo
     pitch_refine: Dict = field(default_factory=dict)
     regime_refine: Dict = field(default_factory=dict)
+    boundary_policy: Dict = field(default_factory=dict)
 
 
 def preprocess_signal(y: np.ndarray, remove_dc: bool = True) -> np.ndarray:
@@ -561,8 +562,49 @@ def effective_min_sustain_duration(
     min_by_frames = (cfg.min_sustain_frames * cfg.hop_length) / max(float(sr), 1.0)
     min_required = max(cfg.min_sustain_duration, cfg.pitch_window_duration, min_by_frames)
     if active_len is not None and 0 < active_len < min_required:
+        # Preferred minimum is reduced toward 25% of L, but never below the
+        # 40-hop analysis grain. This is a clamp floor, not a reject-the-file rule.
         min_required = max(active_len * 0.25, min_by_frames, 0.02)
     return min_required
+
+
+REJECTION_NO_ACTIVE_ENERGY = "no_active_energy"
+REJECTION_INVALID_BOUNDARIES = "invalid_segment_boundaries"
+
+
+def describe_rejection(y: np.ndarray, result: SegmentResult) -> Optional[str]:
+    """Return a stable rejection code, or None if boundaries are exportable.
+
+    Digital silence is rejected even when clamps invent ordered times.
+    Peak is measured after the same DC removal used by detection.
+    """
+    y_chk = preprocess_signal(y, True)
+    peak = float(np.max(np.abs(y_chk))) if len(y_chk) else 0.0
+    if peak < 1e-8 or result.trim.active_len <= 1e-6:
+        return REJECTION_NO_ACTIVE_ENERGY
+    if not validate_segments(result.t_att, result.t_dec, result.t_end):
+        return REJECTION_INVALID_BOUNDARIES
+    return None
+
+
+def _boundary_policy(
+    cfg: SegmentConfig,
+    sr: int,
+    active_len: float,
+    min_sustain: float,
+    sustain_assignment: str,
+) -> Dict:
+    """Operational notes; does not change detector numbers."""
+    min_frames_s = (cfg.min_sustain_frames * cfg.hop_length) / max(float(sr), 1.0)
+    return {
+        "decay_definition": "energy_threshold_after_peak",
+        "min_sustain_s": float(min_sustain),
+        "min_sustain_cfg_s": float(cfg.min_sustain_duration),
+        "min_sustain_frames_s": float(min_frames_s),
+        "active_len_s": float(active_len),
+        "sustain_assignment": sustain_assignment,
+        "frame_floor_limits_short_file": bool(active_len > 0 and min_frames_s >= active_len),
+    }
 
 
 def parse_note_from_filename(path: Optional[Path]) -> Tuple[Optional[float], Dict]:
@@ -578,7 +620,10 @@ def parse_note_from_filename(path: Optional[Path]) -> Tuple[Optional[float], Dic
     }
     if path is None:
         return None, info
-    match = re.search(r"([A-Ga-g])(#|b)?(\d+)", path.stem)
+    # Require a non-letter boundary before the note letter so names such as
+    # "Bagpipe1" or "seg1" are not read as E1 / G1. Iowa-style stems
+    # (Violin_A4, IOWA_Trb.T_pp.B#4) still match.
+    match = re.search(r"(?:^|[^A-Za-z])([A-Ga-g])(#|b)?(\d+)", path.stem)
     if not match:
         return None, info
     letter, accidental, octave = match.group(1).upper(), match.group(2), match.group(3)
@@ -1456,7 +1501,10 @@ def detect_segments(
         if active_len <= 0 or len(y_trimmed) < cfg.frame_length * 2:
             t_att = trim.t_start + cfg.attack_pct * active_len
             t_dec = trim.t_start + (cfg.attack_pct + cfg.sustain_pct) * active_len
-            return SegmentResult(t_att, t_dec, trim.t_end, trim, empty_pitch)
+            policy = _boundary_policy(
+                cfg, sr, active_len, cfg.min_sustain_duration, "operational_proportional"
+            )
+            return SegmentResult(t_att, t_dec, trim.t_end, trim, empty_pitch, {}, policy)
 
         min_sustain = effective_min_sustain_duration(cfg, sr, active_len)
 
@@ -1475,7 +1523,9 @@ def detect_segments(
         )
         if file_meta.get("note_name_wrap_spelling"):
             pitch_info["note_name_wrap_spelling"] = True
+        pre_att, pre_dec = t_att_rel, t_dec_rel
         t_att_rel, t_dec_rel = _clamp_segment_rel(t_att_rel, t_dec_rel, active_len, min_sustain)
+        clamped = abs(t_att_rel - pre_att) > 1e-9 or abs(t_dec_rel - pre_dec) > 1e-9
         if pitch_info.get("used"):
             pitch_info["window_start"] = trim.t_start + pitch_info["window_start"]
             pitch_info["window_end"] = trim.t_start + pitch_info["window_end"]
@@ -1508,7 +1558,14 @@ def detect_segments(
         t_att = trim.t_start + t_att_rel
         t_dec = min(trim.t_start + t_dec_rel, trim.t_end - min_decay)
         t_att = min(t_att, t_dec - min(min_sustain, active_len * 0.5))
-        return SegmentResult(t_att, t_dec, trim.t_end, trim, pitch_info, regime_info)
+        if pitch_info.get("used") and not pitch_info.get("kept_energy_boundaries"):
+            assignment = "pitch_refined"
+        elif clamped:
+            assignment = "operational_clamp"
+        else:
+            assignment = "detector"
+        policy = _boundary_policy(cfg, sr, active_len, min_sustain, assignment)
+        return SegmentResult(t_att, t_dec, trim.t_end, trim, pitch_info, regime_info, policy)
 
     except Exception as exc:
         logger.warning("detect_segments fallback to proportional: %s", exc, exc_info=True)
@@ -1517,7 +1574,10 @@ def detect_segments(
             active_len, cfg.attack_pct, cfg.sustain_pct, cfg.decay_pct, cfg.min_sustain_duration
         )
         trim = TrimInfo(0, len(y), 0.0, active_len - 1e-3, active_len)
-        return SegmentResult(t_att, t_dec, trim.t_end, trim, empty_pitch)
+        policy = _boundary_policy(
+            cfg, sr, active_len, cfg.min_sustain_duration, "fallback_proportional"
+        )
+        return SegmentResult(t_att, t_dec, trim.t_end, trim, empty_pitch, {}, policy)
 
 
 def validate_segments(
@@ -1712,8 +1772,9 @@ def process_audio_file(
 
     y, sr = librosa.load(str(input_path), sr=None)
     result = detect_segments(y, sr, cfg, file_path=input_path)
-    if not validate_segments(result.t_att, result.t_dec, result.t_end):
-        raise ValueError(f"Invalid segment boundaries for {input_path.name}")
+    rejected = describe_rejection(y, result)
+    if rejected:
+        raise ValueError(f"Rejected {input_path.name}: {rejected}")
 
     rr = result.regime_refine or {}
     # Standard folders keep energy+pitch sustain; regime trim is an extra export.
@@ -1778,6 +1839,7 @@ def process_audio_file(
         "dur_rel": (len(y) - idx_end) / sr,
         "pitch_refine": result.pitch_refine,
         "regime_refine": rr,
+        "boundary_policy": result.boundary_policy,
         "regime_flux_sidecar": str(sidecar_path) if sidecar_path else None,
         "detection_mode": (
             "advanced" if cfg.use_advanced else ("smart" if cfg.use_smart else "proportional")

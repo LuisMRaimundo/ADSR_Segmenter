@@ -53,6 +53,8 @@ Entry points after install: `adsr-segmenter-gui`, `adsr-segmenter-cli`, `adsr-se
 
 Detection modes: **smart** (energy + proportional anchors, default), **advanced** (spectral flux + derivatives), **proportional**. Pitch refinement: **expand** (default), **annotate** (full sustain for STFT + metadata), **crop** (tight stable window). Spectral-regime refinement: **annotate** (default, metadata only), **trim** (also writes `_Sustains_Stable/`), or **off**. Regime flux is level-normalised; half-integer bands are relative to \(f_0\). Optional `--flux-sidecar` writes `<stem>.flux.json` on the sustain frame grid.
 
+These four folder names are **operational energy/pitch regions**, not uniquely determined physical ADSR instants. The detector always emits attack / sustain / decay / release intervals (clamped to minimum durations) even when a recording has no synthesizer-style sustain. Metadata `decay_start` / \(t_{\mathrm{dec}}\) is an energy-threshold offset after the peak, not synthesizer decay-to-sustain. Digital silence is rejected per file (`no_active_energy`); other files in the same batch still complete. The GUI writes beside the source folder; CLI `--output` selects another directory. See [docs/ADSR_Segmenter_math_formula.md](docs/ADSR_Segmenter_math_formula.md).
+
 ---
 
 ## Documentation
@@ -62,6 +64,7 @@ Detection modes: **smart** (energy + proportional anchors, default), **advanced*
 | [QUICK_GUIDE.md](QUICK_GUIDE.md) | Non-specialist workflow |
 | [run.bat](run.bat) | Windows launcher (Python already installed) |
 | [docs/TECHNICAL_MANUAL.md](docs/TECHNICAL_MANUAL.md) | Full DSP specification, API, tutorials |
+| [docs/ADSR_Segmenter_math_formula.md](docs/ADSR_Segmenter_math_formula.md) | Implementation-faithful formula reference |
 | [docs/REGIME_REFINE_NOTES.md](docs/REGIME_REFINE_NOTES.md) | Spectral-regime defaults and rationale |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 | [installers/README.md](installers/README.md) | Autonomous installers (Windows / macOS / Linux) |
@@ -91,7 +94,9 @@ pip install -e ".[dev]"
 pytest
 ```
 
-GitHub Actions runs `pytest` on push (see `.github/workflows/ci.yml`).
+GitHub Actions runs `pytest` on push (see `.github/workflows/ci.yml`). Iowa trombone AIFF fixtures under `tests/fixtures/` are optional; those tests skip when the file is absent.
+
+Declared dependencies are `librosa>=0.10.0` and the rest of `requirements.txt` / `pyproject.toml`. A reused developer venv with `include-system-site-packages = true` was observed at Python 3.10.11 + librosa 0.10.2.post1. A sibling isolated venv (`include-system-site-packages = false`) installed the same declared pins and resolved librosa 0.11.0. Do not treat either as a published lockfile.
 
 ---
 

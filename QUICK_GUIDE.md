@@ -18,7 +18,7 @@ python split_audio_segments.py
 ## 2. Prepare files
 
 - Put all audio files in **one folder** (`.wav` recommended; MP3 needs ffmpeg).
-- Name files with pitch when possible, e.g. `Violin_A4_01.wav` (helps sustain detection).
+- Name files with pitch when possible, e.g. `Violin_A4_01.wav` (helps sustain detection). The note letters must not sit inside another word (`Bagpipe1` is not read as E1).
 
 ## 3. Run a batch split
 
@@ -30,6 +30,10 @@ python split_audio_segments.py
 6. Use **Review Segmentation** to drag attack (green) and decay (orange) lines if needed.
 
 ## 4. Outputs
+
+The GUI writes **next to the source folder** (there is no separate output-folder control). Use the CLI `--output` flag to write elsewhere.
+
+The four region folders are **operational energy/pitch cuts**, not unique physical ADSR instants. “Decay start” is when energy has fallen after the peak, not a synthesizer decay-to-sustain point. Silent files are skipped with a rejection message; other files in the same batch still run.
 
 Next to your source files:
 
