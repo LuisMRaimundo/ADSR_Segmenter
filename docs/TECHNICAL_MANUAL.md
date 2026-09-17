@@ -145,7 +145,7 @@ Preset percentages (`attack_pct`, `sustain_pct`, `decay_pct`) define **target pr
 
 ### 5.1 End-to-end stages
 
-1. **Load** — native sample rate preserved: `librosa.load(path, sr=None)`
+1. **Load** — native sample rate preserved: `librosa.load(path, sr=None)` (library default `mono=True` downmixes stereo to one channel)
 2. **Preprocess** — optional DC removal
 3. **Trim** — `librosa.effects.trim` at `trim_db` below peak
 4. **Detect** — proportional / smart / advanced mode
@@ -217,7 +217,7 @@ Thresholds are **relative to trimmed peak**, not absolute dBFS.
 
 ### 7.2 Algorithm summary
 
-1. Derive YIN `fmin`/`fmax` in this order: (a) note parsed from the filename ±1 octave; (b) `expected_note_hz` ±1 octave; (c) `pitch_fmin`/`pitch_fmax` (defaults 30–4200 Hz). The exact octave-below bin is excluded so the tracker cannot sit on \(f_0/2\).
+1. Derive YIN `fmin`/`fmax` in this order: (a) note parsed from the filename ±1 octave; (b) `expected_note_hz` ±1 octave; (c) `pitch_fmin`/`pitch_fmax` (defaults 30–4200 Hz). The exact octave-below bin is excluded so the tracker cannot sit on \(f_0/2\). The filename token must not be preceded by another letter (`Violin_A4` matches; `Bagpipe1` / `seg1` do not).
 2. Frame length scales with `fmin`: \(\geq 4\,f_s/f_{\min}\), power of two, capped at 8192. Hop is unchanged.
 3. Cents deviation from median F0; vibrato-robust stability (linear detrend + moving-median residual).
 4. Sliding-window seed search; optional expansion at \(1.25 \times\) stability tolerance.
@@ -433,7 +433,13 @@ where \(K_{\min} =\) `min_sustain_frames`, \(H =\) `hop_length`, \(f_s =\) sampl
 | CLI `--preset` | `"Medium (1.5-3.0s)"` | `split_audio_cli.py` |
 | Benchmark tolerance | 50 ms | `DEFAULT_TOLERANCE_MS` |
 
-**Note:** The GUI initializes `min_sustain_duration` spinbox to 1.0 s before a preset is applied; **Apply Preset** overwrites this from the preset table below.
+**Note:** The GUI **Min Sustain (s)** spinbox starts at \(0.35\,\mathrm{s}\) (Medium). The unused class constant `DEFAULT_MIN_SUSTAIN_DURATION` is not read by `_config_from_ui`. **Apply Preset** overwrites the spinbox from the table below.
+
+The 40-hop term \(K_{\min} H / f_s\) is a **preferred minimum that is clamped** into the active region. It is not an eligibility gate: files shorter than that floor still receive ordered operational attack/sustain/decay intervals. The short-file branch cannot undercut the hop floor. A no-sustain envelope is still assigned a sustain interval. Metadata `boundary_policy.sustain_assignment` records `detector`, `operational_clamp`, `operational_proportional`, `pitch_refined`, or `fallback_proportional`.
+
+\(t_{\mathrm{dec}}\) / metadata `decay_start` is an **energy-threshold crossing after the peak** (default \(50\%\) of peak RMS, after the proportional sustain guard). It is not synthesizer decay-to-sustain-level.
+
+Digital silence (no active energy) is **rejected per file**. CLI and GUI batches continue other files, record the filename and `no_active_energy`, write no segments for the silent item, and report a mixed/all-invalid summary. CLI exit code is `2` if any file is rejected; `0` only when every file succeeds. The GUI copies widget values on the UI thread (`_snapshot_run_settings`) before the worker starts; the worker must not call Tk `.get()`. The GUI writes beside the source folder (no separate output-folder control). Review label: **Decay (energy offset)**.
 
 ### 10.4 Duration presets (`PRESETS`)
 
@@ -802,11 +808,15 @@ n_{\mathrm{ZC}} = n_{\mathrm{start}} + \mathrm{round}(n_j + \tau)
 
 ### 11.10 Fade envelopes
 
-Fade length in samples:
+Fade length in samples (implementation of `apply_fades`):
 
 \[
-N_{\mathrm{fade}} = \mathrm{clip}\!\left(\left\lfloor f_s \frac{T_{\mathrm{fade,ms}}}{1000}\right\rfloor,\; \left\lfloor\frac{f_s}{20}\right\rfloor,\; \left\lfloor\frac{N_{\mathrm{seg}}}{2}\right\rfloor\right)
+N_{\mathrm{req}} = \left\lfloor f_s \frac{T_{\mathrm{fade,ms}}}{1000}\right\rfloor,\quad
+N_{\mathrm{floor}} = \min\!\left(\left\lfloor f_s/20\right\rfloor,\; \left\lfloor N_{\mathrm{seg}}/4\right\rfloor\right),\quad
+N_{\mathrm{fade}} = \min\!\left(\max(N_{\mathrm{req}}, N_{\mathrm{floor}}),\; \left\lfloor N_{\mathrm{seg}}/2\right\rfloor\right)
 \]
+
+The 50 ms term \(\lfloor f_s/20\rfloor\) is therefore a *candidate* floor; on short segments the floor is \(N_{\mathrm{seg}}/4\) instead. This is not a simple clip of the requested fade to \([50\,\mathrm{ms},\, N_{\mathrm{seg}}/2]\).
 
 Parameter \(u \in [0,1]\), \(u_m = m/(N_{\mathrm{fade}}-1)\).
 

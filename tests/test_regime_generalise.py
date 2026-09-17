@@ -191,7 +191,9 @@ def test_unvoiced_noise_keeps_energy(sr):
     cfg = core.SegmentConfig(min_sustain_duration=0.15, pitch_refine_mode="annotate")
     result = core.detect_segments(y, sr, cfg, file_path=Path("noise_burst.wav"))
     assert result.pitch_refine.get("failed") is True
-    assert result.pitch_refine.get("failed_reason") == "unvoiced"
+    # librosa 0.10 typically reports unvoiced; 0.11 may report tracking_failed.
+    assert result.pitch_refine.get("failed_reason") in {"unvoiced", "tracking_failed"}
+    assert result.pitch_refine.get("kept_energy_boundaries") is True
     assert result.regime_refine.get("used") is True
 
 

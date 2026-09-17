@@ -47,7 +47,7 @@ class ADSRSegmenter:
     DEFAULT_ATTACK_THRESHOLD = 0.9  # 90% of peak energy for attack
     DEFAULT_DECAY_THRESHOLD = 0.50  # 50% of peak for decay onset
     DEFAULT_SUSTAIN_VARIANCE_THRESHOLD = 0.2  # 20% variance for sustain plateau (relaxed)
-    DEFAULT_MIN_SUSTAIN_DURATION = 1.0  # Minimum 1.0s for sustain (safe default)
+    DEFAULT_MIN_SUSTAIN_DURATION = 0.35  # Unused in detection; widget default matches Medium preset
     DEFAULT_MIN_SUSTAIN_FRAMES = 40  # Minimum frames in sustain for stability
     DEFAULT_PITCH_STABILITY_CENTS = 5.0  # Max pitch std (cents) for stationary sustain
     DEFAULT_PITCH_WINDOW_DURATION = 0.5  # Target window length for pitch stability (seconds)
@@ -118,6 +118,9 @@ class ADSRSegmenter:
         self._last_pitch_refine_info: Dict[str, Optional[float]] = {}
         self._last_regime_refine_info: Dict = {}
         self._last_trim: Optional[segcore.TrimInfo] = None
+        self._last_boundary_policy: Dict = {}
+        self.batch_failures: List[Dict] = []
+        self._run_settings: Optional[Dict] = None
 
         self._build_ui()
 
@@ -143,6 +146,43 @@ class ADSRSegmenter:
                 None if int(self.regime_analysis_n_fft.get()) <= 0 else int(self.regime_analysis_n_fft.get())
             ),
         )
+
+    def _snapshot_run_settings(self) -> None:
+        """Capture Tk values on the UI thread. The batch worker must not call .get()."""
+        cfg = self._config_from_ui()
+        self._run_settings = {
+            "config": cfg,
+            "fade_ms": float(self.fade_ms.get()),
+            "fade_type": str(self.fade_type.get()),
+            "write_flux_sidecar": bool(self.write_flux_sidecar.get()),
+            "use_mp": bool(self.use_multiprocessing.get()) if hasattr(self, "use_multiprocessing") else False,
+            "max_workers": int(self.max_workers.get()) if hasattr(self, "max_workers") else 1,
+            "source_folder": str(self.source_folder.get()),
+            "attack_threshold": float(self.attack_threshold.get()),
+            "decay_threshold": float(self.decay_threshold.get()),
+            "smart_mode": bool(self.use_smart_mode.get()) if hasattr(self, "use_smart_mode") else True,
+            "advanced_mode": bool(self.use_advanced_mode.get()) if hasattr(self, "use_advanced_mode") else False,
+            "pitch_stability_cents": float(self.pitch_stability_cents.get()) if hasattr(self, "pitch_stability_cents") else self.DEFAULT_PITCH_STABILITY_CENTS,
+            "pitch_window_duration": float(self.pitch_window_duration.get()) if hasattr(self, "pitch_window_duration") else self.DEFAULT_PITCH_WINDOW_DURATION,
+            "regime_refine_mode": str(self.regime_refine_mode.get()) if hasattr(self, "regime_refine_mode") else "annotate",
+            "regime_flux_ratio": float(self.regime_flux_ratio.get()) if hasattr(self, "regime_flux_ratio") else 2.0,
+            "regime_analysis_n_fft": int(self.regime_analysis_n_fft.get()) if hasattr(self, "regime_analysis_n_fft") else 0,
+        }
+
+    def _clear_run_settings(self) -> None:
+        self._run_settings = None
+
+    def _active_config(self) -> SegmentConfig:
+        settings = getattr(self, "_run_settings", None)
+        if settings:
+            return settings["config"]
+        return self._config_from_ui()
+
+    def _active_fade(self) -> Tuple[float, str]:
+        settings = getattr(self, "_run_settings", None)
+        if settings:
+            return float(settings["fade_ms"]), str(settings["fade_type"])
+        return float(self.fade_ms.get()), str(self.fade_type.get())
     
     def _build_ui(self):
         """Build the user interface."""
@@ -491,10 +531,11 @@ class ADSRSegmenter:
     
     def detect_segments(self, y: np.ndarray, sr: int, file_path: Optional[Path] = None) -> Tuple[float, float, float]:
         """Detect segment boundaries (absolute file times)."""
-        result = segcore.detect_segments(y, sr, self._config_from_ui(), file_path)
+        result = segcore.detect_segments(y, sr, self._active_config(), file_path)
         self._last_trim = result.trim
         self._last_pitch_refine_info = result.pitch_refine
         self._last_regime_refine_info = result.regime_refine
+        self._last_boundary_policy = result.boundary_policy
         return result.t_att, result.t_dec, result.t_end
 
     def _validate_segments(self, t_att: float, t_dec: float, t_end: float,
@@ -506,9 +547,10 @@ class ADSRSegmenter:
         trim = self._last_trim
         if trim is None:
             _, trim = segcore.trim_active_region(y, sr, self.DEFAULT_TRIM_DB)
+        fade_ms, fade_type = self._active_fade()
         return segcore.extract_and_fade_segments(
             y, sr, t_att, t_dec, t_end, trim,
-            float(self.fade_ms.get()), str(self.fade_type.get()),
+            fade_ms, fade_type,
         )
 
     def _soundfile_format_for_extension(self, ext: str) -> Optional[str]:
@@ -581,9 +623,17 @@ class ADSRSegmenter:
                 }
                 regime_info = dict(self._last_regime_refine_info) if self._last_regime_refine_info else {}
             
-            # Validate
-            if not self._validate_segments(t_att, t_dec, t_end):
-                return f"Error: Invalid segment boundaries detected"
+            trim = self._last_trim
+            if trim is None:
+                _, trim = segcore.trim_active_region(y, sr, self.DEFAULT_TRIM_DB)
+            rejected = segcore.describe_rejection(
+                y, segcore.SegmentResult(t_att, t_dec, t_end, trim, pitch_info, regime_info)
+            )
+            if rejected:
+                fail = {"file_path": str(f_path), "error": f"Rejected {f_path.name}: {rejected}"}
+                with self._state_lock:
+                    self.batch_failures.append(fail)
+                return f"Rejected: {rejected}"
 
             t_att_std = float(regime_info.get("source_att", t_att))
             t_dec_std = float(regime_info.get("source_dec", t_dec))
@@ -607,7 +657,7 @@ class ADSRSegmenter:
                     output_path = target_dir / f"{f_path.stem}_{tag}{f_path.suffix}"
                     self._write_audio(output_path, audio, sr)
 
-            cfg_now = self._config_from_ui()
+            cfg_now = self._active_config()
             if cfg_now.use_regime_refine and cfg_now.regime_refine_mode == "trim":
                 stable_dir = out_dir / "_Sustains_Stable"
                 stable_dir.mkdir(exist_ok=True, parents=True)
@@ -621,7 +671,8 @@ class ADSRSegmenter:
                     )
 
             sidecar_path = None
-            if self.write_flux_sidecar.get():
+            write_flux = bool(self._run_settings["write_flux_sidecar"]) if self._run_settings else bool(self.write_flux_sidecar.get())
+            if write_flux:
                 f0_hz = None if pitch_info.get("failed") else (
                     pitch_info.get("median_f0_hz") or pitch_info.get("expected_note_hz")
                 )
@@ -647,6 +698,7 @@ class ADSRSegmenter:
                 "dur_rel": (len(y) - idx_end) / sr,
                 "pitch_refine": pitch_info,
                 "regime_refine": regime_info,
+                "boundary_policy": dict(getattr(self, "_last_boundary_policy", {}) or {}),
                 "regime_flux_sidecar": str(sidecar_path) if sidecar_path else None,
             }
             with self._state_lock:
@@ -669,13 +721,22 @@ class ADSRSegmenter:
             
             # Provide helpful error messages for common issues
             if "NoBackendError" in error_type or "backend" in error_msg.lower():
-                return f"Error: Audio backend not available. Install ffmpeg or soundfile."
+                msg = "Error: Audio backend not available. Install ffmpeg or soundfile."
             elif "file" in error_msg.lower() and "not found" in error_msg.lower():
-                return f"Error: File not found"
+                msg = "Error: File not found"
             elif "format" in error_msg.lower() or "codec" in error_msg.lower():
-                return f"Error: Unsupported audio format"
+                msg = "Error: Unsupported audio format"
+            else:
+                msg = None
+            if msg:
+                with self._state_lock:
+                    self.batch_failures.append({"file_path": str(f_path), "error": msg})
+                return msg
             else:
                 logger.error(f"Error processing {f_path.name}: {e}", exc_info=True)
+                fail = {"file_path": str(f_path), "error": f"{error_type}: {error_msg}"}
+                with self._state_lock:
+                    self.batch_failures.append(fail)
                 return f"Error: {error_type}: {error_msg}"
     
     def _apply_manual_segment(self, file_path: str, t_att_new: float, t_dec_new: float):
@@ -996,7 +1057,7 @@ class ADSRSegmenter:
         self.attack_line = self.review_ax.axvline(info["t_att"], color="green", 
                                                   linestyle="--", linewidth=2, label="Attack")
         self.decay_line = self.review_ax.axvline(info["t_dec"], color="orange", 
-                                                linestyle="--", linewidth=2, label="Decay")
+                                                linestyle="--", linewidth=2, label="Decay (energy offset)")
         
         self.review_ax.axvline(info["t_end"], color="red", linestyle=":", 
                               linewidth=1, alpha=0.5, label="End")
@@ -1022,6 +1083,8 @@ class ADSRSegmenter:
         
         self.is_running = True
         self.log_lines = []
+        self.batch_failures = []
+        self._snapshot_run_settings()
         self.progress.configure(value=0)
         self.btn_run.config(state=tk.DISABLED)
         
@@ -1040,8 +1103,9 @@ class ADSRSegmenter:
                 return
             
             total = len(files)
-            use_mp = self.use_multiprocessing.get() if hasattr(self, 'use_multiprocessing') else False
-            max_workers = self.max_workers.get() if hasattr(self, 'max_workers') else 1
+            settings = self._run_settings or {}
+            use_mp = bool(settings.get("use_mp", False))
+            max_workers = int(settings.get("max_workers", 1))
             
             if use_mp and total > 1 and max_workers > 1:
                 # Use multiprocessing
@@ -1054,10 +1118,24 @@ class ADSRSegmenter:
             
             # Export metadata if requested
             self._export_metadata(folder)
-            
-            self._log("Processing complete!")
+
+            n_ok = len(self.segment_info)
+            n_fail = len(self.batch_failures)
+            summary = f"Done: {n_ok} succeeded, {n_fail} rejected"
+            self._log(summary)
             self.root.after(0, lambda: self.btn_run.config(state=tk.NORMAL))
-            self.root.after(0, self._open_review_window)
+            if n_fail and n_ok == 0:
+                self.root.after(
+                    0,
+                    lambda: messagebox.showwarning(
+                        "Batch finished",
+                        summary + "\nExpected invalid input (e.g. digital silence) is rejected per file.",
+                    ),
+                )
+            elif n_fail:
+                self.root.after(0, lambda: messagebox.showwarning("Batch finished", summary))
+            if n_ok:
+                self.root.after(0, self._open_review_window)
             
         except Exception as e:
             logger.error(f"Error in worker: {e}", exc_info=True)
@@ -1066,6 +1144,7 @@ class ADSRSegmenter:
             self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
         finally:
             self.is_running = False
+            self.root.after(0, self._clear_run_settings)
     
     def _worker_sequential(self, files: List[Path], folder: Path):
         """Sequential processing of files."""
@@ -1122,15 +1201,32 @@ class ADSRSegmenter:
     
     def _export_metadata(self, folder: Path):
         """Export segmentation metadata to JSON and CSV."""
-        if not self.segment_info:
+        if not self.segment_info and not self.batch_failures:
             return
         
         try:
             # Export to JSON
             json_path = folder / "segmentation_metadata.json"
-            metadata = {
-                "export_date": datetime.now().isoformat(),
-                "parameters": {
+            snap = self._run_settings
+            if snap:
+                parameters = {
+                    "fade_ms": snap["fade_ms"],
+                    "attack_threshold": snap["attack_threshold"],
+                    "decay_threshold": snap["decay_threshold"],
+                    "fade_type": snap["fade_type"],
+                    "smart_mode": snap["smart_mode"],
+                    "advanced_mode": snap["advanced_mode"],
+                    "multiprocessing": snap["use_mp"],
+                    "pitch_stability_cents": snap["pitch_stability_cents"],
+                    "pitch_window_duration": snap["pitch_window_duration"],
+                    "regime_refine_mode": snap["regime_refine_mode"],
+                    "regime_flux_ratio": snap["regime_flux_ratio"],
+                    "regime_analysis_n_fft": snap["regime_analysis_n_fft"],
+                    "flux_sidecar": snap["write_flux_sidecar"],
+                    "decay_boundary_definition": "energy_threshold_after_peak",
+                }
+            else:
+                parameters = {
                     "fade_ms": self.fade_ms.get(),
                     "attack_threshold": self.attack_threshold.get(),
                     "decay_threshold": self.decay_threshold.get(),
@@ -1144,7 +1240,11 @@ class ADSRSegmenter:
                     "regime_flux_ratio": self.regime_flux_ratio.get() if hasattr(self, 'regime_flux_ratio') else 2.0,
                     "regime_analysis_n_fft": self.regime_analysis_n_fft.get() if hasattr(self, 'regime_analysis_n_fft') else 0,
                     "flux_sidecar": self.write_flux_sidecar.get() if hasattr(self, 'write_flux_sidecar') else False,
-                },
+                    "decay_boundary_definition": "energy_threshold_after_peak",
+                }
+            metadata = {
+                "export_date": datetime.now().isoformat(),
+                "parameters": parameters,
                 "files": []
             }
             
@@ -1164,10 +1264,13 @@ class ADSRSegmenter:
                         },
                         "pitch_stability": info.get("pitch_refine", {}),
                         "regime_refine": info.get("regime_refine", {}),
+                        "boundary_policy": info.get("boundary_policy", {}),
                         "regime_flux_sidecar": info.get("regime_flux_sidecar"),
                     }
                 }
                 metadata["files"].append(file_metadata)
+            for fail in self.batch_failures:
+                metadata["files"].append({"file_path": fail.get("file_path"), "error": fail.get("error")})
             
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
@@ -1210,6 +1313,12 @@ class ADSRSegmenter:
                         "" if regime.get("refused") is None else str(bool(regime.get("refused"))),
                         regime.get("refused_reason") or "",
                         info.get("regime_flux_sidecar") or "",
+                    ])
+                for fail in self.batch_failures:
+                    writer.writerow([
+                        Path(str(fail.get("file_path", ""))).name,
+                        "", "", "", "", "", "", "", "",
+                        fail.get("error") or "",
                     ])
             
             self._log(f"Metadata exported to {json_path.name} and {csv_path.name}")

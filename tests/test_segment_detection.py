@@ -83,7 +83,24 @@ def test_extract_starts_at_trim_not_file_start(sr):
 
 def test_parse_note_from_filename():
     assert core.parse_note_hz_from_filename(Path("Violin_A4_test.wav")) == pytest.approx(440.0, rel=1e-3)
+    assert core.parse_note_hz_from_filename(Path("A4.wav")) == pytest.approx(440.0, rel=1e-3)
+    assert core.parse_note_hz_from_filename(Path("IOWA_Trb.T_pp.B#4.aif")) == pytest.approx(
+        float(__import__("librosa").note_to_hz("B#4")), rel=1e-3
+    )
     assert core.parse_note_hz_from_filename(Path("noise.wav")) is None
+    assert core.parse_note_hz_from_filename(Path("seg1.wav")) is None
+    assert core.parse_note_hz_from_filename(Path("Bagpipe1.wav")) is None
+    assert core.parse_note_hz_from_filename(Path("Flute2.wav")) is None
+    assert core.parse_note_hz_from_filename(Path("noteA4.wav")) is None
+    assert core.parse_note_hz_from_filename(Path("Horn_Ab4.wav")) == pytest.approx(
+        float(__import__("librosa").note_to_hz("Ab4")), rel=1e-3
+    )
+    assert core.parse_note_hz_from_filename(Path("Clarinet_A#4.wav")) == pytest.approx(
+        float(__import__("librosa").note_to_hz("A#4")), rel=1e-3
+    )
+    assert core.parse_note_hz_from_filename(Path("Piano_Cb5.wav")) == pytest.approx(
+        float(__import__("librosa").note_to_hz("Cb5")), rel=1e-3
+    )
 
 
 def test_proportional_percentages_sum(sr):

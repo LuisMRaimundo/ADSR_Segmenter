@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+Clarifications and parser/batch reporting. Detection thresholds, hop, window, and 40-hop sustain floor are unchanged.
+
+- Filename note tokens must not be preceded by a letter (`Violin_A4`, `B#4`, `Ab4` still match; `Bagpipe1` / `seg1` / `Flute2` do not).
+- Metadata `boundary_policy` records whether sustain was detected or operationally assigned; \(t_{\mathrm{dec}}\) is documented as an energy-threshold offset, not synthesizer decay-to-sustain.
+- Digital silence is rejected per file (`no_active_energy`); CLI/GUI batches continue valid files and report mixed/all-invalid outcomes (CLI exit `2`).
+- GUI batch snapshots widget values on the UI thread before the worker starts (the worker must not call Tk `.get()`).
+- Document operational versus conceptual ADSR regions; correct the fade-length formula and mono load behaviour.
+- Add `docs/ADSR_Segmenter_math_formula.md`.
+- Pitch-fail test on unvoiced noise accepts `unvoiced` or `tracking_failed` (librosa 0.10 vs 0.11 YIN diagnostic) and still requires energy boundaries to be kept.
+
 ## 3.3.2 — 2026-08-18
 
 Half-integer `n_fft` is chosen from band resolution, not from the pitch frame.
