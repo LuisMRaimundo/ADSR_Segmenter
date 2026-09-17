@@ -10,6 +10,7 @@ Clarifications and parser/batch reporting. Detection thresholds, hop, window, an
 - GUI batch snapshots widget values on the UI thread before the worker starts (the worker must not call Tk `.get()`).
 - Document operational versus conceptual ADSR regions; correct the fade-length formula and mono load behaviour.
 - Add `docs/ADSR_Segmenter_math_formula.md`.
+- Pitch-fail test on unvoiced noise accepts `unvoiced` or `tracking_failed` (librosa 0.10 vs 0.11 YIN diagnostic) and still requires energy boundaries to be kept.
 
 ## 3.3.2 — 2026-08-18
 

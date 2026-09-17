@@ -37,7 +37,7 @@ GitHub `origin/main` at generation time is `8ad432f`. This file describes the re
 | `tests/test_advanced_features.py` | 203 | `e69de1f1453247d8965a144d55871a45db1d77ec811d92c972c69e3f7806e179` |
 | `tests/test_benchmark.py` | 73 | `854e17557af011ebe7f9091232e4f4df0815e9c39e3e3ab73b665a4e9056f98c` |
 | `tests/test_regime_refine.py` | 219 | `b77e90a751c0d08df5cde05d826cf02d2be5d535e7b944077dcd63e669c3b29f` |
-| `tests/test_regime_generalise.py` | 337 | `c5a6227cd11599ea08656b873fb2d2122c79171b03cea1d0d4da3d96f5023ebb` |
+| `tests/test_regime_generalise.py` | 339 | `9b59114b1c502b61a9697cd72a21281d920aa902def3d0a2c1a2caf11ffecc1f` |
 | `tests/test_silence_and_policy.py` | 127 | `69ebd5e1777d0cba753f7ccf1046e53dfe4a5997e9a0841bdab7fd2dadaa3e7d` |
 
 ### 0.2 Coverage classification
